@@ -4,13 +4,13 @@ import { getAuth, GoogleAuthProvider } from "firebase/auth";
 import { getAnalytics, isSupported } from "firebase/analytics";
 
 const firebaseConfig = {
-  apiKey: "AIzaSyAXUJSlNo1ncGw4IjkZjlO_LnbUKR3YPdI",
-  authDomain: "pradeep-kirana-store-bfff1.firebaseapp.com",
-  projectId: "pradeep-kirana-store-bfff1",
-  storageBucket: "pradeep-kirana-store-bfff1.firebasestorage.app",
-  messagingSenderId: "445739510579",
-  appId: "1:445739510579:web:040818d41177d77d112c46",
-  measurementId: "G-8J091D6JKJ"
+  apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
+  authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
+  projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
+  storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
+  appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
+  measurementId: process.env.NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID
 };
 
 // Initialize Firebase (Next.js ke liye safe tarika)
