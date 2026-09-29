@@ -103,6 +103,9 @@ export default function AdminDashboard() {
   const [addingCoupon, setAddingCoupon] = useState(false);
 
   const isFirstLoad = useRef(true);
+  // Ref for Glitch Scanner so we don't process the same order twice
+  const checkedGlitchesRef = useRef<Set<string>>(new Set());
+  
   const categories = ["Atta & Dal", "Snacks", "Dairy", "Spices", "Drinks", "+ Add New Category"];
 
   useEffect(() => {
@@ -169,6 +172,7 @@ export default function AdminDashboard() {
     return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
   };
 
+  // ================= MAIN DATA FETCHING =================
   useEffect(() => {
     if (!isAuthenticated) return;
     const qOrders = query(collection(db, "orders"), orderBy("orderDate", "desc"));
@@ -221,6 +225,63 @@ export default function AdminDashboard() {
 
     return () => { unsubOrders(); unsubProducts(); unsubReviews(); unsubCoupons(); unsubStoreStatus(); unsubDeliveryConfig(); };
   }, [isAuthenticated]);
+
+  // ================= AUTO-GLITCH SCANNER (NEGATIVE STOCK CHECK) =================
+  useEffect(() => {
+    const scanForGlitchedOrders = async () => {
+      // Kyunki orders newest first sorted hain, jo naya order glitch layega wahi pakda jayega
+      for (const order of orders) {
+        if (order.status === "Pending" && !checkedGlitchesRef.current.has(order.id)) {
+          checkedGlitchesRef.current.add(order.id);
+          
+          let isGlitched = false;
+          
+          for (const item of order.items) {
+            const itemRef = doc(db, "items", item.id);
+            const itemSnap = await getDoc(itemRef);
+            if (itemSnap.exists()) {
+               // Check if stock went negative (-1, -2) due to race condition glitch
+               if (itemSnap.data().stockQuantity < 0) {
+                  isGlitched = true;
+                  break;
+               }
+            } else {
+               // Agar item database se permanently delete ho chuka hai
+               isGlitched = true;
+               break;
+            }
+          }
+
+          if (isGlitched) {
+            try {
+              const orderRef = doc(db, "orders", order.id);
+              // 1. Restore the stock back to database
+              const restorePromises = order.items.map((item: any) => {
+                return updateDoc(doc(db, "items", item.id), {
+                  stockQuantity: increment(item.cartQuantity)
+                });
+              });
+              await Promise.all(restorePromises);
+
+              // 2. Auto-Cancel the order
+              await updateDoc(orderRef, {
+                status: "Cancelled",
+                cancellationReason: "System Auto-Cancel: Item not in stock"
+              });
+              
+              alert(`⚠️ Glitch Detected & Fixed: Order #${order.orderId || order.id.slice(0,6)} was Auto-Cancelled because an item went out of stock!`);
+            } catch(e) {
+              console.error("Auto-cancel failed", e);
+            }
+          }
+        }
+      }
+    };
+
+    if (isAuthenticated && orders.length > 0) {
+      scanForGlitchedOrders();
+    }
+  }, [orders, isAuthenticated]);
 
   useEffect(() => {
     if (activeTab === "reviews" && reviews.length > 0) {

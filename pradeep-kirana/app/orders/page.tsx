@@ -1,39 +1,67 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { collection, query, where, orderBy, onSnapshot, doc, updateDoc } from "firebase/firestore";
+import { collection, query, where, orderBy, onSnapshot, doc, updateDoc, getDoc } from "firebase/firestore";
 import { onAuthStateChanged } from "firebase/auth";
 import { db, auth } from "@/lib/firebase";
 import { useRouter } from "next/navigation";
 import { Package, Clock, CheckCircle, Bike, Store, ArrowLeft, ChevronRight, Tag, Truck, X, CheckCircle2, RotateCcw } from "lucide-react";
 import { useCart } from "@/context/CartContext";
 
+// Modern & Soothing Success Notification Sound
 const playNotificationSound = () => {
   try {
     const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
     if (!AudioContext) return;
     const ctx = new AudioContext();
-    const playTone = (freq: number, start: number, duration: number) => {
+    const playTone = (freq: number, type: OscillatorType, start: number, duration: number) => {
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
-      osc.type = "sine";
+      osc.type = type;
       osc.frequency.setValueAtTime(freq, ctx.currentTime + start);
-      gain.gain.setValueAtTime(0.3, ctx.currentTime + start);
+      // Smooth ADSR envelope for premium sound
+      gain.gain.setValueAtTime(0, ctx.currentTime + start);
+      gain.gain.linearRampToValueAtTime(0.2, ctx.currentTime + start + 0.05);
       gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + start + duration);
       osc.connect(gain);
       gain.connect(ctx.destination);
       osc.start(ctx.currentTime + start);
       osc.stop(ctx.currentTime + start + duration);
     };
-    playTone(523.25, 0, 0.2);
-    playTone(659.25, 0.15, 0.2);
-    playTone(783.99, 0.3, 0.4);
+    playTone(523.25, 'sine', 0, 0.4);    // C5
+    playTone(659.25, 'sine', 0.1, 0.5);  // E5
+    playTone(783.99, 'sine', 0.2, 0.6);  // G5
+  } catch (e) { console.error(e); }
+};
+
+// Soft Error/Alert Sound (For Out of Stock)
+const playAlertSound = () => {
+  try {
+    const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
+    if (!AudioContext) return;
+    const ctx = new AudioContext();
+    const playTone = (freq: number, type: OscillatorType, start: number, duration: number) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = type;
+      osc.frequency.setValueAtTime(freq, ctx.currentTime + start);
+      gain.gain.setValueAtTime(0, ctx.currentTime + start);
+      gain.gain.linearRampToValueAtTime(0.15, ctx.currentTime + start + 0.05);
+      gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + start + duration);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(ctx.currentTime + start);
+      osc.stop(ctx.currentTime + start + duration);
+    };
+    playTone(349.23, 'triangle', 0, 0.4);    // F4
+    playTone(311.13, 'triangle', 0.15, 0.5); // Eb4
   } catch (e) { console.error(e); }
 };
 
 export default function OrdersPage() {
   const [orders, setOrders] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [orderingId, setOrderingId] = useState<string | null>(null); // Loader state for Order Again
   const router = useRouter();
   
   const { addToCart, setIsCartOpen } = useCart() as any;
@@ -70,14 +98,53 @@ export default function OrdersPage() {
     }
   };
 
-  const handleOrderAgain = (items: any[]) => {
+  // Robust Live-Stock Checked Order Again Function
+  const handleOrderAgain = async (items: any[], orderId: string) => {
     if (!items || items.length === 0) return;
-    items.forEach((item) => {
-      addToCart(item);
-    });
-    alert("Items added to your cart! 🛒");
-    setIsCartOpen(true);
-    router.push("/");
+    setOrderingId(orderId); // Start loading animation on the button
+    
+    let outOfStockItems: string[] = [];
+    let added = false;
+
+    // Check live stock from Firebase for each item
+    for (const oldItem of items) {
+      try {
+        const itemRef = doc(db, "items", oldItem.id);
+        const itemSnap = await getDoc(itemRef);
+
+        if (itemSnap.exists()) {
+          const liveItem = { id: itemSnap.id, ...itemSnap.data() } as any;
+
+          // Check if item is available and has stock
+          if (liveItem.stockQuantity > 0 && liveItem.isAvailable) {
+            addToCart(liveItem);
+            added = true;
+          } else {
+            outOfStockItems.push(oldItem.name);
+          }
+        } else {
+          // Item deleted from database
+          outOfStockItems.push(oldItem.name);
+        }
+      } catch (error) {
+        console.error("Error checking stock:", error);
+      }
+    }
+
+    setOrderingId(null); // Stop loading
+
+    if (outOfStockItems.length > 0) {
+      playAlertSound();
+      alert(`⚠️ Ye items abhi out of stock hain:\n\n❌ ${outOfStockItems.join("\n❌ ")}\n\nBaaki available items aapke cart mein add kar diye gaye hain.`);
+    } else if (added) {
+      playNotificationSound();
+      alert("✅ Saare items successfully cart mein add ho gaye!");
+    }
+    
+    if (added) {
+      setIsCartOpen(true);
+      router.push("/");
+    }
   };
 
   const getStatusIndex = (status: string, isPickup: boolean) => {
@@ -238,11 +305,21 @@ export default function OrdersPage() {
                   {/* ================= ORDER AGAIN BUTTON ================= */}
                   <div className="p-5 border-t border-gray-100 dark:border-gray-800 flex justify-end">
                     <button 
-                      onClick={() => handleOrderAgain(order.items)}
-                      className="flex items-center gap-2 px-5 py-2.5 bg-blue-50 hover:bg-blue-100 dark:bg-blue-900/20 dark:hover:bg-blue-900/40 text-blue-600 dark:text-blue-400 font-bold text-sm rounded-xl border border-blue-200 dark:border-blue-800/40 transition-colors shadow-sm"
+                      onClick={() => handleOrderAgain(order.items, order.id)}
+                      disabled={orderingId === order.id}
+                      className="flex items-center gap-2 px-5 py-2.5 bg-blue-50 hover:bg-blue-100 dark:bg-blue-900/20 dark:hover:bg-blue-900/40 text-blue-600 dark:text-blue-400 font-bold text-sm rounded-xl border border-blue-200 dark:border-blue-800/40 transition-colors shadow-sm disabled:opacity-70 disabled:cursor-not-allowed"
                     >
-                      <RotateCcw size={16} />
-                      Order Again
+                      {orderingId === order.id ? (
+                        <>
+                          <div className="w-4 h-4 border-2 border-blue-600 dark:border-blue-400 border-t-transparent rounded-full animate-spin"></div>
+                          Checking Stock...
+                        </>
+                      ) : (
+                        <>
+                          <RotateCcw size={16} />
+                          Order Again
+                        </>
+                      )}
                     </button>
                   </div>
 

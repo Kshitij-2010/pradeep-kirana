@@ -6,7 +6,7 @@ import { signInWithPopup, signOut, onAuthStateChanged } from "firebase/auth";
 import { db, auth, googleProvider } from "@/lib/firebase";
 import { useCart } from "@/context/CartContext"; 
 import { useWishlist } from "@/context/WishlistContext";
-import { Plus, Minus, MapPin, Store, ChevronRight, Search, X, UserCircle, Package, BellRing, Phone, MessageCircle, Clock, ExternalLink, Home, Star, AlertTriangle, CheckCircle2, Heart, ShoppingBag } from "lucide-react";
+import { Plus, Minus, MapPin, Store, ChevronRight, Search, X, UserCircle, Package, BellRing, Phone, MessageCircle, Clock, ExternalLink, Home, Star, AlertTriangle, CheckCircle2, Heart, ShoppingBag, Trash2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 
 function StoreLogo({ className = "w-8 h-8" }: { className?: string }) {
@@ -116,6 +116,25 @@ export default function BlinkitStyleStorefront() {
   
   const { cart, addToCart, removeFromCart, cartTotal, cartCount, isCartOpen, setIsCartOpen } = useCart() as any;
   const { toggleWishlist, isInWishlist } = useWishlist() as any;
+
+  // Function to delete item completely from cart
+  const handleRemoveEntireItem = (item: any) => {
+    for (let i = 0; i < item.cartQuantity; i++) {
+      removeFromCart(item.id);
+    }
+  };
+
+  // Function to clear entire cart
+  const handleClearCart = () => {
+    if (window.confirm("Are you sure you want to clear your cart?")) {
+      cart.forEach((item: any) => {
+        for (let i = 0; i < item.cartQuantity; i++) {
+          removeFromCart(item.id);
+        }
+      });
+      setIsCartOpen(false);
+    }
+  };
 
   // Auto-Timings Logic
   useEffect(() => {
@@ -533,17 +552,17 @@ export default function BlinkitStyleStorefront() {
         </div>
       </main>
 
-      {/* FLOATING MORPHING CART BUTTON */}
+      {/* FLOATING MORPHING CART BUTTON (SMOOTH ANIMATION) */}
       <div 
-        className={`fixed z-40 transition-all duration-500 ease-[cubic-bezier(0.34,1.56,0.64,1)] ${
+        className={`fixed z-40 transition-all duration-300 ease-in-out ${
           cartCount > 0 
-            ? "bottom-[76px] left-1/2 -translate-x-1/2 w-[calc(100%-24px)] max-w-4xl" // Expanded Rectangle
-            : "bottom-[76px] right-4 w-14 h-14 translate-x-0" // Circular FAB
+            ? "bottom-[76px] left-4 right-4 w-auto md:left-1/2 md:-translate-x-1/2 md:w-full md:max-w-4xl" 
+            : "bottom-[76px] right-4 w-14 h-14 translate-x-0" 
         }`}
       >
         <button 
           onClick={() => setIsCartOpen(true)} 
-          className={`bg-green-600 text-white shadow-2xl overflow-hidden flex items-center transition-all duration-500 hover:bg-green-700 border border-green-500/50 ${
+          className={`bg-green-600 text-white shadow-2xl overflow-hidden flex items-center transition-all duration-300 hover:bg-green-700 border border-green-500/50 ${
             cartCount > 0 
               ? "w-full rounded-2xl py-3 px-4 justify-between" 
               : "w-full h-full rounded-full justify-center"
@@ -574,12 +593,21 @@ export default function BlinkitStyleStorefront() {
         <button onClick={() => { if (!user) { alert("Please login first!"); handleLogin(); } else router.push('/orders'); }} className="flex flex-col items-center gap-1 text-gray-500 dark:text-gray-400 hover:text-green-600 dark:hover:text-green-500 font-semibold text-xs"><Package size={22} /><span>Orders</span></button>
       </nav>
 
-      {/* CART SIDEBAR */}
+      {/* CART SIDEBAR (SMOOTH SLIDE-IN) */}
       {isCartOpen && (
-        <div className="fixed inset-0 z-[60] flex justify-end bg-black/60 backdrop-blur-sm">
-          <div className="w-full max-w-md bg-white dark:bg-[#121212] h-full shadow-2xl flex flex-col animate-in slide-in-from-right-full duration-300">
+        <div className="fixed inset-0 z-[60] flex justify-end bg-black/60 backdrop-blur-sm animate-in fade-in duration-300">
+          <div className="w-full max-w-md bg-white dark:bg-[#121212] h-full shadow-2xl flex flex-col animate-in slide-in-from-right-full duration-300 ease-out">
+            
+            {/* CART HEADER */}
             <div className="p-4 border-b border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-[#1e1e1e] flex justify-between items-center">
-              <h2 className="text-xl font-bold text-gray-900 dark:text-white flex items-center gap-2">Your Cart</h2>
+              <div className="flex items-center gap-3">
+                <h2 className="text-xl font-bold text-gray-900 dark:text-white flex items-center gap-2">Your Cart</h2>
+                {cartCount > 0 && (
+                  <button onClick={handleClearCart} className="text-[10px] sm:text-xs text-red-500 font-bold hover:bg-red-50 dark:hover:bg-red-900/20 px-2.5 py-1.5 rounded-lg border border-red-100 dark:border-red-900/50 transition flex items-center gap-1">
+                    <Trash2 size={12} /> Clear Cart
+                  </button>
+                )}
+              </div>
               <button onClick={() => setIsCartOpen(false)} className="p-2 text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-[#2a2a2a] rounded-full transition"><X size={24} /></button>
             </div>
             
@@ -598,6 +626,7 @@ export default function BlinkitStyleStorefront() {
               </div>
             )}
 
+            {/* CART ITEMS LIST */}
             <div className="flex-1 overflow-y-auto p-4">
               {cart.length === 0 ? (
                 <div className="h-full flex flex-col items-center justify-center text-gray-400">
@@ -609,19 +638,22 @@ export default function BlinkitStyleStorefront() {
                   <div key={item.id} className="flex justify-between items-center bg-gray-50 dark:bg-[#1a1a1a] p-3 mb-2 rounded-lg border border-gray-200 dark:border-gray-800">
                     <div className="flex items-center gap-3">
                       {item.imageUrl ? <img src={item.imageUrl} alt={item.name} className="w-10 h-10 rounded object-cover border border-gray-200 dark:border-gray-700" /> : <div className="w-10 h-10 rounded bg-gray-200 dark:bg-gray-800 text-gray-500 dark:text-gray-400 flex items-center justify-center font-bold">{item.name.charAt(0)}</div>}
-                      <div><h4 className="font-semibold text-gray-900 dark:text-white text-sm">{item.name}</h4><p className="text-sm text-gray-500 dark:text-gray-400">₹{item.price}</p></div>
+                      <div><h4 className="font-semibold text-gray-900 dark:text-white text-sm line-clamp-1">{item.name}</h4><p className="text-sm text-gray-500 dark:text-gray-400">₹{item.price}</p></div>
                     </div>
-                    <div className="flex items-center bg-white dark:bg-[#121212] rounded-lg border border-gray-200 dark:border-gray-700 shadow-sm">
-                      <button onClick={() => removeFromCart(item.id)} className="p-1.5 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-[#2a2a2a] transition">
-                        <Minus size={16}/>
-                      </button>
-                      <span className="px-3 font-semibold text-gray-900 dark:text-white text-sm">{item.cartQuantity}</span>
+                    <div className="flex items-center gap-2">
+                      <div className="flex items-center bg-white dark:bg-[#121212] rounded-lg border border-gray-200 dark:border-gray-700 shadow-sm">
+                        <button onClick={() => removeFromCart(item.id)} className="p-1.5 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-[#2a2a2a] transition"><Minus size={16}/></button>
+                        <span className="px-2.5 font-semibold text-gray-900 dark:text-white text-sm">{item.cartQuantity}</span>
+                        <button onClick={() => addToCart(item)} disabled={item.cartQuantity >= item.stockQuantity} className="p-1.5 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-[#2a2a2a] transition disabled:opacity-30 disabled:cursor-not-allowed"><Plus size={16}/></button>
+                      </div>
+                      
+                      {/* DELETE ITEM BUTTON */}
                       <button 
-                        onClick={() => addToCart(item)} 
-                        disabled={item.cartQuantity >= item.stockQuantity}
-                        className="p-1.5 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-[#2a2a2a] transition disabled:opacity-30 disabled:cursor-not-allowed"
+                        onClick={() => handleRemoveEntireItem(item)} 
+                        className="p-2 bg-red-50 dark:bg-red-900/20 text-red-500 hover:bg-red-100 dark:hover:bg-red-900/40 rounded-lg border border-transparent hover:border-red-200 dark:hover:border-red-800/50 transition"
+                        title="Remove Item"
                       >
-                        <Plus size={16}/>
+                        <Trash2 size={16} />
                       </button>
                     </div>
                   </div>
