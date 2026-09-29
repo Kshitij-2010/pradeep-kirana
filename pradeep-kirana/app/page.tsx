@@ -512,9 +512,17 @@ export default function BlinkitStyleStorefront() {
                     <div><h4 className="font-semibold text-gray-900 dark:text-white text-sm">{item.name}</h4><p className="text-sm text-gray-500 dark:text-gray-400">₹{item.price}</p></div>
                   </div>
                   <div className="flex items-center bg-white dark:bg-[#121212] rounded-lg border border-gray-200 dark:border-gray-700 shadow-sm">
-                    <button onClick={() => removeFromCart(item.id)} className="p-1.5 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-[#2a2a2a] transition"><Minus size={16}/></button>
+                    <button onClick={() => removeFromCart(item.id)} className="p-1.5 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-[#2a2a2a] transition">
+                      <Minus size={16}/>
+                    </button>
                     <span className="px-3 font-semibold text-gray-900 dark:text-white text-sm">{item.cartQuantity}</span>
-                    <button onClick={() => addToCart(item)} className="p-1.5 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-[#2a2a2a] transition"><Plus size={16}/></button>
+                    <button 
+                      onClick={() => addToCart(item)} 
+                      disabled={item.cartQuantity >= item.stockQuantity}
+                      className="p-1.5 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-[#2a2a2a] transition disabled:opacity-30 disabled:cursor-not-allowed"
+                    >
+                      <Plus size={16}/>
+                    </button>
                   </div>
                 </div>
               ))}
@@ -647,4 +655,4 @@ export default function BlinkitStyleStorefront() {
       )}
     </div>
   );
-} 
+}
