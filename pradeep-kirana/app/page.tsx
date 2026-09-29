@@ -6,7 +6,7 @@ import { signInWithPopup, signOut, onAuthStateChanged } from "firebase/auth";
 import { db, auth, googleProvider } from "@/lib/firebase";
 import { useCart } from "@/context/CartContext"; 
 import { useWishlist } from "@/context/WishlistContext";
-import { Plus, Minus, MapPin, Store, ChevronRight, Search, X, UserCircle, Package, BellRing, Phone, MessageCircle, Clock, ExternalLink, Home, Star, AlertTriangle, CheckCircle2, Heart } from "lucide-react";
+import { Plus, Minus, MapPin, Store, ChevronRight, Search, X, UserCircle, Package, BellRing, Phone, MessageCircle, Clock, ExternalLink, Home, Star, AlertTriangle, CheckCircle2, Heart, ShoppingBag } from "lucide-react";
 import { useRouter } from "next/navigation";
 
 function StoreLogo({ className = "w-8 h-8" }: { className?: string }) {
@@ -77,6 +77,14 @@ const playCancellationSound = () => {
   } catch (e) { console.error(e); }
 };
 
+const formatTimeAmPm = (timeStr: string) => {
+  if (!timeStr) return "";
+  let [h, m] = timeStr.split(':').map(Number);
+  const ampm = h >= 12 ? 'PM' : 'AM';
+  h = h % 12 || 12;
+  return `${h}:${m.toString().padStart(2, '0')} ${ampm}`;
+};
+
 export default function BlinkitStyleStorefront() {
   const router = useRouter();
   
@@ -87,7 +95,10 @@ export default function BlinkitStyleStorefront() {
   const [user, setUser] = useState<any>(null);
   const [customerOrders, setCustomerOrders] = useState<any[]>([]);
   
-  const [storeStatus, setStoreStatus] = useState({ deliveryPaused: false });
+  // Store Status State
+  const [storeStatus, setStoreStatus] = useState({ deliveryPaused: false, storePaused: false, autoTimeEnabled: false, openTime: "09:00", closeTime: "21:00" });
+  const [isStoreOpen, setIsStoreOpen] = useState(true);
+
   const [deliveryConfig, setDeliveryConfig] = useState({ baseFee: 10, freeAbove: 100 });
   
   const [searchQuery, setSearchQuery] = useState("");
@@ -105,6 +116,37 @@ export default function BlinkitStyleStorefront() {
   
   const { cart, addToCart, removeFromCart, cartTotal, cartCount, isCartOpen, setIsCartOpen } = useCart() as any;
   const { toggleWishlist, isInWishlist } = useWishlist() as any;
+
+  // Auto-Timings Logic
+  useEffect(() => {
+    const checkStatus = () => {
+      if (storeStatus.storePaused) {
+        setIsStoreOpen(false);
+        return;
+      }
+      if (storeStatus.autoTimeEnabled && storeStatus.openTime && storeStatus.closeTime) {
+        const now = new Date();
+        const current = now.getHours() * 60 + now.getMinutes();
+        const [oh, om] = storeStatus.openTime.split(':').map(Number);
+        const [ch, cm] = storeStatus.closeTime.split(':').map(Number);
+        const open = oh * 60 + om;
+        const close = ch * 60 + cm;
+        
+        if (close < open) { // Crosses midnight
+          setIsStoreOpen(current >= open || current <= close);
+        } else {
+          setIsStoreOpen(current >= open && current <= close);
+        }
+      } else {
+        setIsStoreOpen(true);
+      }
+    };
+    
+    checkStatus();
+    // Check time every 30 seconds
+    const timer = setInterval(checkStatus, 30000); 
+    return () => clearInterval(timer);
+  }, [storeStatus]);
 
   useEffect(() => {
     const unsubscribeAuth = onAuthStateChanged(auth, (currentUser) => {
@@ -312,7 +354,23 @@ export default function BlinkitStyleStorefront() {
         </div>
       </header>
 
-      {storeStatus.deliveryPaused && (
+      {/* STORE CLOSED BANNER */}
+      {!isStoreOpen && (
+        <div className="bg-red-100 dark:bg-red-900/50 border-b border-red-200 dark:border-red-800/50 px-4 py-3 flex items-center justify-center gap-2 z-30 shadow-sm">
+          <Store size={18} className="text-red-600 dark:text-red-400 shrink-0" />
+          <p className="text-xs sm:text-sm font-bold text-red-800 dark:text-red-300 text-center">
+            Store is currently closed. We are not accepting orders right now.
+            {storeStatus.autoTimeEnabled && storeStatus.openTime && (
+              <span className="block sm:inline sm:ml-1">
+                (Opens at {formatTimeAmPm(storeStatus.openTime)})
+              </span>
+            )}
+          </p>
+        </div>
+      )}
+
+      {/* DELIVERY PAUSED BANNER (Only show if store is open but delivery is off) */}
+      {isStoreOpen && storeStatus.deliveryPaused && (
         <div className="bg-orange-100 dark:bg-orange-900/50 border-b border-orange-200 dark:border-orange-800/50 px-4 py-2.5 flex items-center justify-center gap-2 z-30 shadow-sm">
           <AlertTriangle size={18} className="text-orange-600 dark:text-orange-400 shrink-0" />
           <p className="text-xs sm:text-sm font-bold text-orange-800 dark:text-orange-300 text-center">
@@ -475,14 +533,42 @@ export default function BlinkitStyleStorefront() {
         </div>
       </main>
 
-      {/* Cart & Bottom Nav */}
-      {cartCount > 0 && (
-        <div className="fixed bottom-16 left-0 w-full p-3 bg-white dark:bg-[#121212] border-t border-gray-200 dark:border-gray-800 z-40 animate-in slide-in-from-bottom-5">
-          <div className="max-w-4xl mx-auto"><button onClick={() => setIsCartOpen(true)} className="w-full bg-green-700 dark:bg-green-600 text-white rounded-xl py-3 px-4 flex items-center justify-between shadow-lg hover:scale-[1.01] transition transform"><div className="flex flex-col items-start"><span className="text-xs font-semibold">{cartCount} items</span><span className="text-base font-bold">₹{finalCartTotalWithDelivery.toFixed(2)}</span></div><div className="flex items-center gap-1 font-bold text-sm">View Cart <ChevronRight size={18} /></div></button></div>
-        </div>
-      )}
+      {/* FLOATING MORPHING CART BUTTON */}
+      <div 
+        className={`fixed z-40 transition-all duration-500 ease-[cubic-bezier(0.34,1.56,0.64,1)] ${
+          cartCount > 0 
+            ? "bottom-[76px] left-1/2 -translate-x-1/2 w-[calc(100%-24px)] max-w-4xl" // Expanded Rectangle
+            : "bottom-[76px] right-4 w-14 h-14 translate-x-0" // Circular FAB
+        }`}
+      >
+        <button 
+          onClick={() => setIsCartOpen(true)} 
+          className={`bg-green-600 text-white shadow-2xl overflow-hidden flex items-center transition-all duration-500 hover:bg-green-700 border border-green-500/50 ${
+            cartCount > 0 
+              ? "w-full rounded-2xl py-3 px-4 justify-between" 
+              : "w-full h-full rounded-full justify-center"
+          }`}
+        >
+          {cartCount > 0 ? (
+            <div className="flex w-full justify-between items-center animate-in fade-in duration-300">
+              <div className="flex flex-col items-start">
+                <span className="text-[11px] uppercase tracking-wider font-bold text-green-200 leading-tight">{cartCount} Item{cartCount > 1 ? 's' : ''}</span>
+                <span className="text-base font-extrabold leading-tight mt-0.5">₹{finalCartTotalWithDelivery.toFixed(2)}</span>
+              </div>
+              <div className="flex items-center gap-1 font-bold text-sm bg-black/10 px-3 py-1.5 rounded-xl">
+                View Cart <ChevronRight size={18} className="text-green-200" />
+              </div>
+            </div>
+          ) : (
+            <div className="relative animate-in zoom-in duration-300">
+              <ShoppingBag size={22} className="text-white" />
+            </div>
+          )}
+        </button>
+      </div>
 
-      <nav className="fixed bottom-0 left-0 w-full bg-white dark:bg-[#121212] border-t border-gray-200 dark:border-gray-800 z-50 py-2.5 px-8 flex justify-around items-center shadow-2xl">
+      {/* BOTTOM NAV */}
+      <nav className="fixed bottom-0 left-0 w-full bg-white dark:bg-[#121212] border-t border-gray-200 dark:border-gray-800 z-50 py-2.5 px-8 flex justify-around items-center shadow-[0_-4px_20px_rgba(0,0,0,0.05)] dark:shadow-[0_-4px_20px_rgba(0,0,0,0.4)]">
         <button onClick={() => router.push('/')} className="flex flex-col items-center gap-1 text-green-600 dark:text-green-500 font-bold text-xs"><Home size={22} /><span>Home</span></button>
         <button onClick={() => router.push('/wishlist')} className="flex flex-col items-center gap-1 text-gray-500 dark:text-gray-400 hover:text-green-600 dark:hover:text-green-500 font-semibold text-xs"><Heart size={22} /><span>Saved</span></button>
         <button onClick={() => { if (!user) { alert("Please login first!"); handleLogin(); } else router.push('/orders'); }} className="flex flex-col items-center gap-1 text-gray-500 dark:text-gray-400 hover:text-green-600 dark:hover:text-green-500 font-semibold text-xs"><Package size={22} /><span>Orders</span></button>
@@ -492,12 +578,20 @@ export default function BlinkitStyleStorefront() {
       {isCartOpen && (
         <div className="fixed inset-0 z-[60] flex justify-end bg-black/60 backdrop-blur-sm">
           <div className="w-full max-w-md bg-white dark:bg-[#121212] h-full shadow-2xl flex flex-col animate-in slide-in-from-right-full duration-300">
-            <div className="p-4 border-b border-gray-200 dark:border-gray-800 flex justify-between items-center bg-gray-50 dark:bg-[#1e1e1e]">
+            <div className="p-4 border-b border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-[#1e1e1e] flex justify-between items-center">
               <h2 className="text-xl font-bold text-gray-900 dark:text-white flex items-center gap-2">Your Cart</h2>
               <button onClick={() => setIsCartOpen(false)} className="p-2 text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-[#2a2a2a] rounded-full transition"><X size={24} /></button>
             </div>
             
-            {storeStatus.deliveryPaused && (
+            {/* Store Closed Warning */}
+            {!isStoreOpen && (
+              <div className="bg-red-50 dark:bg-red-900/30 p-3 text-xs font-bold text-red-800 dark:text-red-400 border-b border-red-100 dark:border-red-800/50 flex items-center gap-2">
+                <Store size={16} className="shrink-0" />
+                Store is closed right now. You can keep items in your cart but checkout is disabled.
+              </div>
+            )}
+
+            {isStoreOpen && storeStatus.deliveryPaused && (
               <div className="bg-orange-50 dark:bg-orange-900/30 p-3 text-xs font-bold text-orange-800 dark:text-orange-400 border-b border-orange-100 dark:border-orange-800/50 flex items-center gap-2">
                 <AlertTriangle size={16} className="shrink-0" />
                 Note: Delivery is off. You will only be able to place a Store Pickup order.
@@ -505,27 +599,34 @@ export default function BlinkitStyleStorefront() {
             )}
 
             <div className="flex-1 overflow-y-auto p-4">
-              {cart.map((item: any) => (
-                <div key={item.id} className="flex justify-between items-center bg-gray-50 dark:bg-[#1a1a1a] p-3 mb-2 rounded-lg border border-gray-200 dark:border-gray-800">
-                  <div className="flex items-center gap-3">
-                    {item.imageUrl ? <img src={item.imageUrl} alt={item.name} className="w-10 h-10 rounded object-cover border border-gray-200 dark:border-gray-700" /> : <div className="w-10 h-10 rounded bg-gray-200 dark:bg-gray-800 text-gray-500 dark:text-gray-400 flex items-center justify-center font-bold">{item.name.charAt(0)}</div>}
-                    <div><h4 className="font-semibold text-gray-900 dark:text-white text-sm">{item.name}</h4><p className="text-sm text-gray-500 dark:text-gray-400">₹{item.price}</p></div>
-                  </div>
-                  <div className="flex items-center bg-white dark:bg-[#121212] rounded-lg border border-gray-200 dark:border-gray-700 shadow-sm">
-                    <button onClick={() => removeFromCart(item.id)} className="p-1.5 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-[#2a2a2a] transition">
-                      <Minus size={16}/>
-                    </button>
-                    <span className="px-3 font-semibold text-gray-900 dark:text-white text-sm">{item.cartQuantity}</span>
-                    <button 
-                      onClick={() => addToCart(item)} 
-                      disabled={item.cartQuantity >= item.stockQuantity}
-                      className="p-1.5 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-[#2a2a2a] transition disabled:opacity-30 disabled:cursor-not-allowed"
-                    >
-                      <Plus size={16}/>
-                    </button>
-                  </div>
+              {cart.length === 0 ? (
+                <div className="h-full flex flex-col items-center justify-center text-gray-400">
+                  <ShoppingBag size={48} className="mb-4 opacity-50" />
+                  <p className="font-medium text-sm">Your cart is empty.</p>
                 </div>
-              ))}
+              ) : (
+                cart.map((item: any) => (
+                  <div key={item.id} className="flex justify-between items-center bg-gray-50 dark:bg-[#1a1a1a] p-3 mb-2 rounded-lg border border-gray-200 dark:border-gray-800">
+                    <div className="flex items-center gap-3">
+                      {item.imageUrl ? <img src={item.imageUrl} alt={item.name} className="w-10 h-10 rounded object-cover border border-gray-200 dark:border-gray-700" /> : <div className="w-10 h-10 rounded bg-gray-200 dark:bg-gray-800 text-gray-500 dark:text-gray-400 flex items-center justify-center font-bold">{item.name.charAt(0)}</div>}
+                      <div><h4 className="font-semibold text-gray-900 dark:text-white text-sm">{item.name}</h4><p className="text-sm text-gray-500 dark:text-gray-400">₹{item.price}</p></div>
+                    </div>
+                    <div className="flex items-center bg-white dark:bg-[#121212] rounded-lg border border-gray-200 dark:border-gray-700 shadow-sm">
+                      <button onClick={() => removeFromCart(item.id)} className="p-1.5 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-[#2a2a2a] transition">
+                        <Minus size={16}/>
+                      </button>
+                      <span className="px-3 font-semibold text-gray-900 dark:text-white text-sm">{item.cartQuantity}</span>
+                      <button 
+                        onClick={() => addToCart(item)} 
+                        disabled={item.cartQuantity >= item.stockQuantity}
+                        className="p-1.5 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-[#2a2a2a] transition disabled:opacity-30 disabled:cursor-not-allowed"
+                      >
+                        <Plus size={16}/>
+                      </button>
+                    </div>
+                  </div>
+                ))
+              )}
             </div>
 
             <div className="p-6 border-t border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-[#1e1e1e]">
@@ -537,14 +638,14 @@ export default function BlinkitStyleStorefront() {
                 <div className="flex justify-between items-center text-gray-600 dark:text-gray-400">
                   <span>Delivery Charges</span>
                   <span className="font-semibold">
-                    {cartTotal < deliveryConfig.freeAbove ? `₹${deliveryConfig.baseFee}.00` : <span className="text-green-600 dark:text-green-500 font-bold uppercase text-xs">FREE</span>}
+                    {cartTotal === 0 ? "₹0.00" : (cartTotal < deliveryConfig.freeAbove ? `₹${deliveryConfig.baseFee}.00` : <span className="text-green-600 dark:text-green-500 font-bold uppercase text-xs">FREE</span>)}
                   </span>
                 </div>
               </div>
 
               <div className="flex justify-between items-center mb-3 pt-3 border-t border-gray-200 dark:border-gray-700 text-lg font-bold text-gray-900 dark:text-white">
                 <span>Total Amount</span>
-                <span className="text-green-600 dark:text-green-500">₹{finalCartTotalWithDelivery.toFixed(2)}</span>
+                <span className="text-green-600 dark:text-green-500">₹{cartTotal === 0 ? "0.00" : finalCartTotalWithDelivery.toFixed(2)}</span>
               </div>
 
               <div className="mb-4 text-xs font-semibold text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-950/40 p-2.5 rounded-xl border border-blue-100 dark:border-blue-900/50 flex items-center gap-1.5">
@@ -552,7 +653,22 @@ export default function BlinkitStyleStorefront() {
                 <span>Apply coupons and promo codes on the checkout page</span>
               </div>
 
-              <button onClick={() => { setIsCartOpen(false); if(!user) { alert("Login to Checkout!"); handleLogin(); } else router.push('/checkout'); }} className="w-full bg-green-700 dark:bg-green-600 text-white py-4 rounded-xl font-bold text-lg hover:bg-green-800 dark:hover:bg-green-500 transition shadow-md">Proceed to Checkout</button>
+              <button 
+                onClick={() => { 
+                  if (!isStoreOpen || cartCount === 0) return;
+                  setIsCartOpen(false); 
+                  if(!user) { alert("Login to Checkout!"); handleLogin(); } 
+                  else router.push('/checkout'); 
+                }} 
+                disabled={!isStoreOpen || cartCount === 0}
+                className={`w-full py-4 rounded-xl font-bold text-lg transition shadow-md ${
+                  isStoreOpen && cartCount > 0
+                    ? "bg-green-700 dark:bg-green-600 text-white hover:bg-green-800 dark:hover:bg-green-500" 
+                    : "bg-gray-400 dark:bg-gray-700 text-gray-200 cursor-not-allowed"
+                }`}
+              >
+                {!isStoreOpen ? "Checkout Disabled (Store Closed)" : (cartCount === 0 ? "Cart is Empty" : "Proceed to Checkout")}
+              </button>
             </div>
           </div>
         </div>
