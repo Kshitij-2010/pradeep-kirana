@@ -5,7 +5,7 @@ import { collection, query, where, orderBy, onSnapshot, doc, updateDoc, getDoc }
 import { onAuthStateChanged } from "firebase/auth";
 import { db, auth } from "@/lib/firebase";
 import { useRouter } from "next/navigation";
-import { Package, Clock, CheckCircle, Bike, Store, ArrowLeft, ChevronRight, Tag, Truck, X, CheckCircle2, RotateCcw } from "lucide-react";
+import { Package, Clock, CheckCircle, Bike, Store, ArrowLeft, ChevronRight, Tag, Truck, X, CheckCircle2, RotateCcw, AlertTriangle } from "lucide-react";
 import { useCart } from "@/context/CartContext";
 
 // Modern & Soothing Success Notification Sound
@@ -19,7 +19,6 @@ const playNotificationSound = () => {
       const gain = ctx.createGain();
       osc.type = type;
       osc.frequency.setValueAtTime(freq, ctx.currentTime + start);
-      // Smooth ADSR envelope for premium sound
       gain.gain.setValueAtTime(0, ctx.currentTime + start);
       gain.gain.linearRampToValueAtTime(0.2, ctx.currentTime + start + 0.05);
       gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + start + duration);
@@ -61,10 +60,20 @@ const playAlertSound = () => {
 export default function OrdersPage() {
   const [orders, setOrders] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  const [orderingId, setOrderingId] = useState<string | null>(null); // Loader state for Order Again
-  const router = useRouter();
+  const [orderingId, setOrderingId] = useState<string | null>(null);
   
+  // Custom UI Toast Notification State (Replaces ugly browser alerts)
+  const [toast, setToast] = useState<{ show: boolean, message: string, type: 'success' | 'error' }>({ show: false, message: "", type: 'success' });
+  
+  const router = useRouter();
   const { addToCart, setIsCartOpen } = useCart() as any;
+
+  const showToast = (message: string, type: 'success' | 'error' = 'success') => {
+    setToast({ show: true, message, type });
+    setTimeout(() => {
+      setToast(prev => ({ ...prev, show: false }));
+    }, 4500);
+  };
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (user) => {
@@ -91,22 +100,21 @@ export default function OrdersPage() {
         status: newStatus,
         customerConfirmedAt: new Date()
       });
-      alert(`Thank you! Order marked as ${newStatus} successfully 🎉`);
+      showToast(`Thank you! Order marked as ${newStatus} successfully 🎉`, 'success');
     } catch (error) {
       console.error("Error updating status:", error);
-      alert("Status update nahi ho paya, please dobara try karein.");
+      showToast("Status update nahi ho paya, please dobara try karein.", 'error');
     }
   };
 
-  // Robust Live-Stock Checked Order Again Function
+  // Robust Live-Stock Checked Order Again Function with Toast UI
   const handleOrderAgain = async (items: any[], orderId: string) => {
     if (!items || items.length === 0) return;
-    setOrderingId(orderId); // Start loading animation on the button
+    setOrderingId(orderId);
     
     let outOfStockItems: string[] = [];
     let added = false;
 
-    // Check live stock from Firebase for each item
     for (const oldItem of items) {
       try {
         const itemRef = doc(db, "items", oldItem.id);
@@ -115,7 +123,6 @@ export default function OrdersPage() {
         if (itemSnap.exists()) {
           const liveItem = { id: itemSnap.id, ...itemSnap.data() } as any;
 
-          // Check if item is available and has stock
           if (liveItem.stockQuantity > 0 && liveItem.isAvailable) {
             addToCart(liveItem);
             added = true;
@@ -123,7 +130,6 @@ export default function OrdersPage() {
             outOfStockItems.push(oldItem.name);
           }
         } else {
-          // Item deleted from database
           outOfStockItems.push(oldItem.name);
         }
       } catch (error) {
@@ -131,14 +137,14 @@ export default function OrdersPage() {
       }
     }
 
-    setOrderingId(null); // Stop loading
+    setOrderingId(null);
 
     if (outOfStockItems.length > 0) {
       playAlertSound();
-      alert(`⚠️ Ye items abhi out of stock hain:\n\n❌ ${outOfStockItems.join("\n❌ ")}\n\nBaaki available items aapke cart mein add kar diye gaye hain.`);
+      showToast(`⚠️ Out of stock items: ${outOfStockItems.join(", ")}. Available items added to cart.`, 'error');
     } else if (added) {
       playNotificationSound();
-      alert("✅ Saare items successfully cart mein add ho gaye!");
+      showToast("✅ Saare items successfully cart mein add ho gaye!", 'success');
     }
     
     if (added) {
@@ -157,13 +163,34 @@ export default function OrdersPage() {
       if (status === "Out for Delivery" || status === "On the Way" || status === "Awaiting Confirmation") return 3;
       if (status === "Delivered") return 4;
     }
-    return 0; // Cancelled
+    return 0;
   };
 
   if (loading) return <div className="min-h-screen flex justify-center items-center bg-gray-50 dark:bg-[#0a0a0a]"><div className="animate-spin rounded-full h-12 w-12 border-b-2 border-green-600"></div></div>;
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-[#0a0a0a] p-4 md:p-8 transition-colors">
+    <div className="min-h-screen bg-gray-50 dark:bg-[#0a0a0a] p-4 md:p-8 transition-colors relative">
+      
+      {/* ================= MODERN UI TOAST NOTIFICATION BANNER ================= */}
+      {toast.show && (
+        <div className={`fixed top-5 left-1/2 transform -translate-x-1/2 z-[100] w-11/12 max-w-md p-4 rounded-2xl shadow-2xl flex items-center justify-between border animate-in slide-in-from-top-5 duration-300 ${
+          toast.type === 'success' 
+            ? 'bg-green-600 text-white border-green-400' 
+            : 'bg-red-600 text-white border-red-400'
+        }`}>
+          <div className="flex items-center gap-3">
+            <div className="p-2 bg-white/20 rounded-full shrink-0">
+              {toast.type === 'success' ? <CheckCircle2 size={20} /> : <AlertTriangle size={20} />}
+            </div>
+            <div>
+              <p className="text-xs font-bold uppercase tracking-wider opacity-90">Notification</p>
+              <p className="text-sm font-extrabold leading-tight">{toast.message}</p>
+            </div>
+          </div>
+          <button onClick={() => setToast(prev => ({ ...prev, show: false }))} className="p-1 hover:bg-black/20 rounded-full transition shrink-0"><X size={18} /></button>
+        </div>
+      )}
+
       <div className="max-w-3xl mx-auto">
         
         <header className="flex items-center gap-4 mb-6">

@@ -95,7 +95,9 @@ export default function BlinkitStyleStorefront() {
   const [user, setUser] = useState<any>(null);
   const [customerOrders, setCustomerOrders] = useState<any[]>([]);
   
-  // Store Status State
+  const [toast, setToast] = useState<{ show: boolean, message: string, type: 'success' | 'error' | 'info' }>({ show: false, message: "", type: 'info' });
+  const [confirmDialog, setConfirmDialog] = useState<{ show: boolean, title: string, onConfirm: () => void } | null>(null);
+  
   const [storeStatus, setStoreStatus] = useState({ deliveryPaused: false, storePaused: false, autoTimeEnabled: false, openTime: "09:00", closeTime: "21:00" });
   const [isStoreOpen, setIsStoreOpen] = useState(true);
 
@@ -114,29 +116,39 @@ export default function BlinkitStyleStorefront() {
   const prevStatusesRef = useRef<{ [key: string]: string }>({});
   const isFirstLoad = useRef(true);
   
-  const { cart, addToCart, removeFromCart, cartTotal, cartCount, isCartOpen, setIsCartOpen } = useCart() as any;
+  const { cart, addToCart, removeFromCart, cartTotal, cartCount, isCartOpen, setIsCartOpen, cartNotice, setCartNotice } = useCart() as any;
   const { toggleWishlist, isInWishlist } = useWishlist() as any;
 
-  // Function to delete item completely from cart
+  const showToast = (message: string, type: 'success' | 'error' | 'info' = 'info') => {
+    setToast({ show: true, message, type });
+    setTimeout(() => {
+      setToast(prev => ({ ...prev, show: false }));
+    }, 3500);
+  };
+
   const handleRemoveEntireItem = (item: any) => {
     for (let i = 0; i < item.cartQuantity; i++) {
       removeFromCart(item.id);
     }
   };
 
-  // Function to clear entire cart
-  const handleClearCart = () => {
-    if (window.confirm("Are you sure you want to clear your cart?")) {
-      cart.forEach((item: any) => {
-        for (let i = 0; i < item.cartQuantity; i++) {
-          removeFromCart(item.id);
-        }
-      });
-      setIsCartOpen(false);
-    }
+  const handleClearCartClick = () => {
+    setConfirmDialog({
+      show: true,
+      title: "Are you sure you want to clear your cart?",
+      onConfirm: () => {
+        cart.forEach((item: any) => {
+          for (let i = 0; i < item.cartQuantity; i++) {
+            removeFromCart(item.id);
+          }
+        });
+        setIsCartOpen(false);
+        setConfirmDialog(null);
+        showToast("Cart cleared successfully.", "info");
+      }
+    });
   };
 
-  // Auto-Timings Logic
   useEffect(() => {
     const checkStatus = () => {
       if (storeStatus.storePaused) {
@@ -151,7 +163,7 @@ export default function BlinkitStyleStorefront() {
         const open = oh * 60 + om;
         const close = ch * 60 + cm;
         
-        if (close < open) { // Crosses midnight
+        if (close < open) {
           setIsStoreOpen(current >= open || current <= close);
         } else {
           setIsStoreOpen(current >= open && current <= close);
@@ -162,7 +174,6 @@ export default function BlinkitStyleStorefront() {
     };
     
     checkStatus();
-    // Check time every 30 seconds
     const timer = setInterval(checkStatus, 30000); 
     return () => clearInterval(timer);
   }, [storeStatus]);
@@ -252,8 +263,13 @@ export default function BlinkitStyleStorefront() {
   }, []);
 
   const handleLogin = async () => {
-    try { await signInWithPopup(auth, googleProvider); } 
-    catch (error) { alert("Login nahi ho paya, please dobara try karein."); }
+    try { 
+      await signInWithPopup(auth, googleProvider); 
+      showToast("Successfully logged in!", "success");
+    } 
+    catch (error) { 
+      showToast("Failed to login. Please try again.", "error"); 
+    }
   };
 
   const handleConfirmReceipt = async (orderId: string, orderType: string) => {
@@ -264,44 +280,43 @@ export default function BlinkitStyleStorefront() {
         status: newStatus,
         customerConfirmedAt: new Date()
       });
-      alert(`Thank you! Order marked as ${newStatus} successfully 🎉`);
+      showToast(`Thank you! Order marked as ${newStatus} successfully 🎉`, "success");
     } catch (error) {
       console.error("Error updating status:", error);
-      alert("Status update nahi ho paya, please dobara try karein.");
+      showToast("Failed to update status. Please try again.", "error");
     }
   };
 
   const submitReview = async () => {
-    if (!user) { alert("Please login first to write a review! ⭐"); handleLogin(); return; }
-    if (ratingVal === 0) { alert("Please select a star rating first!"); return; }
+    if (!user) { showToast("Please login first to write a review! ⭐", "error"); handleLogin(); return; }
+    if (ratingVal === 0) { showToast("Please select a star rating first!", "error"); return; }
 
     setIsSubmittingReview(true);
     try {
-      await addDoc(collection(db, "reviews"), {
-        productId: selectedProduct.id,
-        productName: selectedProduct.name,
-        customerName: user.displayName || "Customer",
-        rating: ratingVal,
-        reviewText: reviewText,
-        createdAt: new Date()
+      const response = await fetch('/api/reviews', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          productId: selectedProduct.id,
+          ratingVal: ratingVal,
+          reviewText: reviewText,
+          customerName: user.displayName || "Customer",
+          uid: user.uid
+        })
       });
 
-      const productRef = doc(db, "items", selectedProduct.id);
-      const productSnap = await getDoc(productRef);
-      if (productSnap.exists()) {
-        const data = productSnap.data();
-        await updateDoc(productRef, {
-          ratingSum: (data.ratingSum || 0) + ratingVal,
-          ratingCount: (data.ratingCount || 0) + 1
-        });
-      }
+      const data = await response.json();
 
-      alert("Review submitted successfully! Thanks for your feedback 🎉");
-      setRatingVal(0);
-      setReviewText("");
+      if (data.success) {
+        showToast("Review submitted successfully! Thanks for your feedback 🎉", "success");
+        setRatingVal(0);
+        setReviewText("");
+      } else {
+        showToast(`Failed: ${data.error}`, "error");
+      }
     } catch (error) {
       console.error("Review error:", error);
-      alert("Failed to submit review.");
+      showToast("Failed to submit review. Please try again.", "error");
     }
     setIsSubmittingReview(false);
   };
@@ -336,8 +351,45 @@ export default function BlinkitStyleStorefront() {
   return (
     <div className="min-h-screen pb-32 font-sans relative">
       
+      {/* CUSTOM TOAST NOTIFICATION */}
+      {(toast.show || cartNotice) && (
+        <div className={`fixed top-5 left-1/2 transform -translate-x-1/2 z-[100] w-11/12 max-w-md p-4 rounded-2xl shadow-2xl flex items-center justify-between border animate-in slide-in-from-top-5 duration-300 ${
+          (cartNotice || toast.type === 'error') ? 'bg-red-600 text-white border-red-400' 
+          : toast.type === 'success' ? 'bg-green-600 text-white border-green-400'
+          : 'bg-blue-600 text-white border-blue-400'
+        }`}>
+          <div className="flex items-center gap-3">
+            <div className="p-2 bg-white/20 rounded-full shrink-0">
+              {(cartNotice || toast.type === 'error') ? <AlertTriangle size={20} /> : <CheckCircle2 size={20} />}
+            </div>
+            <div>
+              <p className="text-xs font-bold uppercase tracking-wider opacity-90">Notification</p>
+              <p className="text-sm font-extrabold leading-tight">{cartNotice || toast.message}</p>
+            </div>
+          </div>
+          <button onClick={() => { setToast(prev => ({ ...prev, show: false })); if(setCartNotice) setCartNotice(null); }} className="p-1 hover:bg-black/20 rounded-full transition shrink-0"><X size={18} /></button>
+        </div>
+      )}
+
+      {/* CUSTOM CONFIRMATION DIALOG */}
+      {confirmDialog && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+          <div className="bg-white dark:bg-[#121212] w-full max-w-sm rounded-3xl p-6 shadow-2xl border border-gray-200 dark:border-gray-800 text-center">
+            <div className="w-16 h-16 bg-red-100 text-red-600 dark:bg-red-900/30 dark:text-red-400 rounded-full flex items-center justify-center mx-auto mb-4">
+              <Trash2 size={28} />
+            </div>
+            <h3 className="text-lg font-bold text-gray-900 dark:text-white mb-2">{confirmDialog.title}</h3>
+            <p className="text-sm text-gray-500 dark:text-gray-400 mb-6">This action cannot be undone.</p>
+            <div className="flex gap-3">
+              <button onClick={() => setConfirmDialog(null)} className="flex-1 bg-gray-100 hover:bg-gray-200 dark:bg-[#1e1e1e] dark:hover:bg-[#2a2a2a] text-gray-800 dark:text-gray-200 font-bold py-3 rounded-xl transition">Cancel</button>
+              <button onClick={confirmDialog.onConfirm} className="flex-1 bg-red-600 hover:bg-red-700 text-white font-bold py-3 rounded-xl transition shadow-md">Yes, Clear</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {notification.show && (
-        <div onClick={() => router.push('/orders')} className="fixed top-20 left-1/2 transform -translate-x-1/2 z-[100] w-11/12 max-w-lg bg-green-600 text-white p-4 rounded-2xl shadow-2xl cursor-pointer flex items-center justify-between border-2 border-green-400 animate-in slide-in-from-top-5 duration-300 hover:bg-green-700 transition">
+        <div onClick={() => router.push('/orders')} className="fixed top-24 left-1/2 transform -translate-x-1/2 z-[90] w-11/12 max-w-lg bg-green-600 text-white p-4 rounded-2xl shadow-2xl cursor-pointer flex items-center justify-between border-2 border-green-400 animate-in slide-in-from-top-5 duration-300 hover:bg-green-700 transition">
           <div className="flex items-center gap-3"><div className="p-2 bg-white/20 rounded-full animate-bounce"><BellRing size={20} /></div><div><p className="text-xs font-bold uppercase tracking-wider text-green-200">Order Update</p><p className="text-sm font-extrabold">{notification.message}</p></div></div>
           <button onClick={(e) => { e.stopPropagation(); setNotification({ show: false, message: "" }); }} className="p-1 hover:bg-black/20 rounded-full transition"><X size={18} /></button>
         </div>
@@ -359,7 +411,7 @@ export default function BlinkitStyleStorefront() {
               {user ? (
                 <div className="flex items-center gap-1.5 bg-gray-50 dark:bg-[#1a1a1a] p-1 pr-2 sm:pr-3 rounded-full border border-gray-200 dark:border-gray-800">
                   <img src={user.photoURL} alt="Profile" className="w-7 h-7 sm:w-8 sm:h-8 rounded-full border-2 border-green-500 object-cover" />
-                  <div className="text-left"><p className="text-[11px] sm:text-xs font-bold leading-tight text-gray-900 dark:text-white">{user.displayName?.split(" ")[0]}</p><button onClick={() => signOut(auth)} className="text-[9px] sm:text-[10px] text-red-500 font-bold hover:underline">Logout</button></div>
+                  <div className="text-left"><p className="text-[11px] sm:text-xs font-bold leading-tight text-gray-900 dark:text-white">{user.displayName?.split(" ")[0]}</p><button onClick={() => { signOut(auth); showToast("Logged out successfully.", "info"); }} className="text-[9px] sm:text-[10px] text-red-500 font-bold hover:underline">Logout</button></div>
                 </div>
               ) : (
                 <button onClick={handleLogin} className="flex items-center gap-1.5 bg-gray-900 dark:bg-white text-white dark:text-gray-900 px-3 py-1.5 sm:px-4 sm:py-2 rounded-lg text-xs sm:text-sm font-bold shadow-md hover:scale-105 transition transform"><UserCircle size={16} /> Login</button>
@@ -388,7 +440,7 @@ export default function BlinkitStyleStorefront() {
         </div>
       )}
 
-      {/* DELIVERY PAUSED BANNER (Only show if store is open but delivery is off) */}
+      {/* DELIVERY PAUSED BANNER */}
       {isStoreOpen && storeStatus.deliveryPaused && (
         <div className="bg-orange-100 dark:bg-orange-900/50 border-b border-orange-200 dark:border-orange-800/50 px-4 py-2.5 flex items-center justify-center gap-2 z-30 shadow-sm">
           <AlertTriangle size={18} className="text-orange-600 dark:text-orange-400 shrink-0" />
@@ -472,7 +524,6 @@ export default function BlinkitStyleStorefront() {
         </div>
 
         <div className="md:w-3/4 w-full">
-          {/* Sorting Bar */}
           <div className="flex justify-between items-center mb-4 px-1">
             <h2 className="text-base sm:text-lg font-extrabold text-gray-900 dark:text-white">
               {activeCategory === "All" ? "All Groceries & Essentials" : activeCategory}
@@ -492,7 +543,7 @@ export default function BlinkitStyleStorefront() {
           {loading ? (
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 animate-pulse">{[1,2,3,4,5,6].map(n => <div key={n} className="h-56 bg-gray-200 dark:bg-[#1e1e1e] rounded-xl"></div>)}</div>
           ) : filteredProducts.length === 0 ? (
-            <div className="text-center text-gray-500 mt-10">{searchQuery ? "No products found." : "Dukan mein abhi koi saaman nahi hai!"}</div>
+            <div className="text-center text-gray-500 mt-10">{searchQuery ? "No products found." : "Store has no items currently!"}</div>
           ) : (
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
               {filteredProducts.map((product) => {
@@ -505,7 +556,6 @@ export default function BlinkitStyleStorefront() {
                 return (
                   <div key={product.id} className="bg-white dark:bg-[#171717] rounded-xl shadow-sm border border-gray-100 dark:border-gray-800 overflow-hidden flex flex-col relative transition-colors hover:border-green-500/30">
                     
-                    {/* Wishlist Heart Button */}
                     <button 
                       onClick={(e) => { e.stopPropagation(); toggleWishlist(product); }} 
                       className="absolute top-2.5 right-2.5 z-20 p-2 bg-white/80 dark:bg-black/50 backdrop-blur-md rounded-full shadow transition hover:scale-110"
@@ -552,159 +602,157 @@ export default function BlinkitStyleStorefront() {
         </div>
       </main>
 
-      {/* FLOATING MORPHING CART BUTTON (SMOOTH ANIMATION) */}
-      <div 
-        className={`fixed z-40 transition-all duration-300 ease-in-out ${
-          cartCount > 0 
-            ? "bottom-[76px] left-4 right-4 w-auto md:left-1/2 md:-translate-x-1/2 md:w-full md:max-w-4xl" 
-            : "bottom-[76px] right-4 w-14 h-14 translate-x-0" 
-        }`}
-      >
-        <button 
-          onClick={() => setIsCartOpen(true)} 
-          className={`bg-green-600 text-white shadow-2xl overflow-hidden flex items-center transition-all duration-300 hover:bg-green-700 border border-green-500/50 ${
-            cartCount > 0 
-              ? "w-full rounded-2xl py-3 px-4 justify-between" 
-              : "w-full h-full rounded-full justify-center"
-          }`}
-        >
-          {cartCount > 0 ? (
-            <div className="flex w-full justify-between items-center animate-in fade-in duration-300">
-              <div className="flex flex-col items-start">
-                <span className="text-[11px] uppercase tracking-wider font-bold text-green-200 leading-tight">{cartCount} Item{cartCount > 1 ? 's' : ''}</span>
-                <span className="text-base font-extrabold leading-tight mt-0.5">₹{finalCartTotalWithDelivery.toFixed(2)}</span>
+      {/* SMOOTH FLOATING CART BUTTON */}
+      <div className="fixed z-40 bottom-[76px] left-0 right-0 pointer-events-none flex justify-end md:justify-center px-4 md:px-0">
+        <div className="w-full max-w-4xl flex justify-end md:justify-center">
+          <button 
+            onClick={() => setIsCartOpen(true)} 
+            className={`bg-green-600 text-white shadow-2xl overflow-hidden flex items-center transition-all duration-300 ease-out hover:bg-green-700 border border-green-500/50 pointer-events-auto ${
+              cartCount > 0 
+                ? "w-full rounded-2xl py-3 px-4 justify-between" 
+                : "w-14 h-14 rounded-full justify-center"
+            }`}
+          >
+            {cartCount > 0 ? (
+              <div className="flex w-full justify-between items-center whitespace-nowrap">
+                <div className="flex flex-col items-start">
+                  <span className="text-[11px] uppercase tracking-wider font-bold text-green-200 leading-tight">{cartCount} Item{cartCount > 1 ? 's' : ''}</span>
+                  <span className="text-base font-extrabold leading-tight mt-0.5">₹{finalCartTotalWithDelivery.toFixed(2)}</span>
+                </div>
+                <div className="flex items-center gap-1 font-bold text-sm bg-black/10 px-3 py-1.5 rounded-xl">
+                  View Cart <ChevronRight size={18} className="text-green-200" />
+                </div>
               </div>
-              <div className="flex items-center gap-1 font-bold text-sm bg-black/10 px-3 py-1.5 rounded-xl">
-                View Cart <ChevronRight size={18} className="text-green-200" />
-              </div>
-            </div>
-          ) : (
-            <div className="relative animate-in zoom-in duration-300">
-              <ShoppingBag size={22} className="text-white" />
-            </div>
-          )}
-        </button>
+            ) : (
+              <ShoppingBag size={22} className="text-white shrink-0" />
+            )}
+          </button>
+        </div>
       </div>
 
       {/* BOTTOM NAV */}
       <nav className="fixed bottom-0 left-0 w-full bg-white dark:bg-[#121212] border-t border-gray-200 dark:border-gray-800 z-50 py-2.5 px-8 flex justify-around items-center shadow-[0_-4px_20px_rgba(0,0,0,0.05)] dark:shadow-[0_-4px_20px_rgba(0,0,0,0.4)]">
         <button onClick={() => router.push('/')} className="flex flex-col items-center gap-1 text-green-600 dark:text-green-500 font-bold text-xs"><Home size={22} /><span>Home</span></button>
         <button onClick={() => router.push('/wishlist')} className="flex flex-col items-center gap-1 text-gray-500 dark:text-gray-400 hover:text-green-600 dark:hover:text-green-500 font-semibold text-xs"><Heart size={22} /><span>Saved</span></button>
-        <button onClick={() => { if (!user) { alert("Please login first!"); handleLogin(); } else router.push('/orders'); }} className="flex flex-col items-center gap-1 text-gray-500 dark:text-gray-400 hover:text-green-600 dark:hover:text-green-500 font-semibold text-xs"><Package size={22} /><span>Orders</span></button>
+        <button onClick={() => { if (!user) { showToast("Please login first!", "error"); handleLogin(); } else router.push('/orders'); }} className="flex flex-col items-center gap-1 text-gray-500 dark:text-gray-400 hover:text-green-600 dark:hover:text-green-500 font-semibold text-xs"><Package size={22} /><span>Orders</span></button>
       </nav>
 
-      {/* CART SIDEBAR (SMOOTH SLIDE-IN) */}
-      {isCartOpen && (
-        <div className="fixed inset-0 z-[60] flex justify-end bg-black/60 backdrop-blur-sm animate-in fade-in duration-300">
-          <div className="w-full max-w-md bg-white dark:bg-[#121212] h-full shadow-2xl flex flex-col animate-in slide-in-from-right-full duration-300 ease-out">
-            
-            {/* CART HEADER */}
-            <div className="p-4 border-b border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-[#1e1e1e] flex justify-between items-center">
-              <div className="flex items-center gap-3">
-                <h2 className="text-xl font-bold text-gray-900 dark:text-white flex items-center gap-2">Your Cart</h2>
-                {cartCount > 0 && (
-                  <button onClick={handleClearCart} className="text-[10px] sm:text-xs text-red-500 font-bold hover:bg-red-50 dark:hover:bg-red-900/20 px-2.5 py-1.5 rounded-lg border border-red-100 dark:border-red-900/50 transition flex items-center gap-1">
-                    <Trash2 size={12} /> Clear Cart
-                  </button>
-                )}
-              </div>
-              <button onClick={() => setIsCartOpen(false)} className="p-2 text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-[#2a2a2a] rounded-full transition"><X size={24} /></button>
-            </div>
-            
-            {/* Store Closed Warning */}
-            {!isStoreOpen && (
-              <div className="bg-red-50 dark:bg-red-900/30 p-3 text-xs font-bold text-red-800 dark:text-red-400 border-b border-red-100 dark:border-red-800/50 flex items-center gap-2">
-                <Store size={16} className="shrink-0" />
-                Store is closed right now. You can keep items in your cart but checkout is disabled.
-              </div>
-            )}
+      {/* ================= SMOOTH SLIDE-IN CART SIDEBAR ================= */}
+      {/* Overlay Background */}
+      <div 
+        className={`fixed inset-0 z-[60] bg-black/60 backdrop-blur-sm transition-opacity duration-300 ease-in-out ${
+          isCartOpen ? "opacity-100 pointer-events-auto" : "opacity-0 pointer-events-none"
+        }`}
+        onClick={() => setIsCartOpen(false)}
+      />
 
-            {isStoreOpen && storeStatus.deliveryPaused && (
-              <div className="bg-orange-50 dark:bg-orange-900/30 p-3 text-xs font-bold text-orange-800 dark:text-orange-400 border-b border-orange-100 dark:border-orange-800/50 flex items-center gap-2">
-                <AlertTriangle size={16} className="shrink-0" />
-                Note: Delivery is off. You will only be able to place a Store Pickup order.
-              </div>
-            )}
-
-            {/* CART ITEMS LIST */}
-            <div className="flex-1 overflow-y-auto p-4">
-              {cart.length === 0 ? (
-                <div className="h-full flex flex-col items-center justify-center text-gray-400">
-                  <ShoppingBag size={48} className="mb-4 opacity-50" />
-                  <p className="font-medium text-sm">Your cart is empty.</p>
-                </div>
-              ) : (
-                cart.map((item: any) => (
-                  <div key={item.id} className="flex justify-between items-center bg-gray-50 dark:bg-[#1a1a1a] p-3 mb-2 rounded-lg border border-gray-200 dark:border-gray-800">
-                    <div className="flex items-center gap-3">
-                      {item.imageUrl ? <img src={item.imageUrl} alt={item.name} className="w-10 h-10 rounded object-cover border border-gray-200 dark:border-gray-700" /> : <div className="w-10 h-10 rounded bg-gray-200 dark:bg-gray-800 text-gray-500 dark:text-gray-400 flex items-center justify-center font-bold">{item.name.charAt(0)}</div>}
-                      <div><h4 className="font-semibold text-gray-900 dark:text-white text-sm line-clamp-1">{item.name}</h4><p className="text-sm text-gray-500 dark:text-gray-400">₹{item.price}</p></div>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <div className="flex items-center bg-white dark:bg-[#121212] rounded-lg border border-gray-200 dark:border-gray-700 shadow-sm">
-                        <button onClick={() => removeFromCart(item.id)} className="p-1.5 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-[#2a2a2a] transition"><Minus size={16}/></button>
-                        <span className="px-2.5 font-semibold text-gray-900 dark:text-white text-sm">{item.cartQuantity}</span>
-                        <button onClick={() => addToCart(item)} disabled={item.cartQuantity >= item.stockQuantity} className="p-1.5 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-[#2a2a2a] transition disabled:opacity-30 disabled:cursor-not-allowed"><Plus size={16}/></button>
-                      </div>
-                      
-                      {/* DELETE ITEM BUTTON */}
-                      <button 
-                        onClick={() => handleRemoveEntireItem(item)} 
-                        className="p-2 bg-red-50 dark:bg-red-900/20 text-red-500 hover:bg-red-100 dark:hover:bg-red-900/40 rounded-lg border border-transparent hover:border-red-200 dark:hover:border-red-800/50 transition"
-                        title="Remove Item"
-                      >
-                        <Trash2 size={16} />
-                      </button>
-                    </div>
-                  </div>
-                ))
-              )}
-            </div>
-
-            <div className="p-6 border-t border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-[#1e1e1e]">
-              <div className="space-y-2 mb-4 text-sm">
-                <div className="flex justify-between items-center text-gray-600 dark:text-gray-400">
-                  <span>Item Total</span>
-                  <span className="font-semibold text-gray-900 dark:text-white">₹{cartTotal.toFixed(2)}</span>
-                </div>
-                <div className="flex justify-between items-center text-gray-600 dark:text-gray-400">
-                  <span>Delivery Charges</span>
-                  <span className="font-semibold">
-                    {cartTotal === 0 ? "₹0.00" : (cartTotal < deliveryConfig.freeAbove ? `₹${deliveryConfig.baseFee}.00` : <span className="text-green-600 dark:text-green-500 font-bold uppercase text-xs">FREE</span>)}
-                  </span>
-                </div>
-              </div>
-
-              <div className="flex justify-between items-center mb-3 pt-3 border-t border-gray-200 dark:border-gray-700 text-lg font-bold text-gray-900 dark:text-white">
-                <span>Total Amount</span>
-                <span className="text-green-600 dark:text-green-500">₹{cartTotal === 0 ? "0.00" : finalCartTotalWithDelivery.toFixed(2)}</span>
-              </div>
-
-              <div className="mb-4 text-xs font-semibold text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-950/40 p-2.5 rounded-xl border border-blue-100 dark:border-blue-900/50 flex items-center gap-1.5">
-                <span>🏷️</span>
-                <span>Apply coupons and promo codes on the checkout page</span>
-              </div>
-
-              <button 
-                onClick={() => { 
-                  if (!isStoreOpen || cartCount === 0) return;
-                  setIsCartOpen(false); 
-                  if(!user) { alert("Login to Checkout!"); handleLogin(); } 
-                  else router.push('/checkout'); 
-                }} 
-                disabled={!isStoreOpen || cartCount === 0}
-                className={`w-full py-4 rounded-xl font-bold text-lg transition shadow-md ${
-                  isStoreOpen && cartCount > 0
-                    ? "bg-green-700 dark:bg-green-600 text-white hover:bg-green-800 dark:hover:bg-green-500" 
-                    : "bg-gray-400 dark:bg-gray-700 text-gray-200 cursor-not-allowed"
-                }`}
-              >
-                {!isStoreOpen ? "Checkout Disabled (Store Closed)" : (cartCount === 0 ? "Cart is Empty" : "Proceed to Checkout")}
+      {/* Sidebar Panel */}
+      <div 
+        className={`fixed top-0 right-0 z-[70] w-full max-w-md bg-white dark:bg-[#121212] h-full shadow-2xl flex flex-col transform transition-transform duration-300 ease-out ${
+          isCartOpen ? "translate-x-0" : "translate-x-full"
+        }`}
+      >
+        <div className="p-4 border-b border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-[#1e1e1e] flex justify-between items-center">
+          <div className="flex items-center gap-3">
+            <h2 className="text-xl font-bold text-gray-900 dark:text-white flex items-center gap-2">Your Cart</h2>
+            {cartCount > 0 && (
+              <button onClick={handleClearCartClick} className="text-[10px] sm:text-xs text-red-500 font-bold hover:bg-red-50 dark:hover:bg-red-900/20 px-2.5 py-1.5 rounded-lg border border-red-100 dark:border-red-900/50 transition flex items-center gap-1">
+                <Trash2 size={12} /> Clear Cart
               </button>
+            )}
+          </div>
+          <button onClick={() => setIsCartOpen(false)} className="p-2 text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-[#2a2a2a] rounded-full transition"><X size={24} /></button>
+        </div>
+        
+        {!isStoreOpen && (
+          <div className="bg-red-50 dark:bg-red-900/30 p-3 text-xs font-bold text-red-800 dark:text-red-400 border-b border-red-100 dark:border-red-800/50 flex items-center gap-2">
+            <Store size={16} className="shrink-0" />
+            Store is closed right now. You can keep items in your cart but checkout is disabled.
+          </div>
+        )}
+
+        {isStoreOpen && storeStatus.deliveryPaused && (
+          <div className="bg-orange-50 dark:bg-orange-900/30 p-3 text-xs font-bold text-orange-800 dark:text-orange-400 border-b border-orange-100 dark:border-orange-800/50 flex items-center gap-2">
+            <AlertTriangle size={16} className="shrink-0" />
+            Note: Delivery is off. You will only be able to place a Store Pickup order.
+          </div>
+        )}
+
+        <div className="flex-1 overflow-y-auto p-4">
+          {cart.length === 0 ? (
+            <div className="h-full flex flex-col items-center justify-center text-gray-400">
+              <ShoppingBag size={48} className="mb-4 opacity-50" />
+              <p className="font-medium text-sm">Your cart is empty.</p>
+            </div>
+          ) : (
+            cart.map((item: any) => (
+              <div key={item.id} className="flex justify-between items-center bg-gray-50 dark:bg-[#1a1a1a] p-3 mb-2 rounded-lg border border-gray-200 dark:border-gray-800">
+                <div className="flex items-center gap-3">
+                  {item.imageUrl ? <img src={item.imageUrl} alt={item.name} className="w-10 h-10 rounded object-cover border border-gray-200 dark:border-gray-700" /> : <div className="w-10 h-10 rounded bg-gray-200 dark:bg-gray-800 text-gray-500 dark:text-gray-400 flex items-center justify-center font-bold">{item.name.charAt(0)}</div>}
+                  <div><h4 className="font-semibold text-gray-900 dark:text-white text-sm line-clamp-1">{item.name}</h4><p className="text-sm text-gray-500 dark:text-gray-400">₹{item.price}</p></div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <div className="flex items-center bg-white dark:bg-[#121212] rounded-lg border border-gray-200 dark:border-gray-700 shadow-sm">
+                    <button onClick={() => removeFromCart(item.id)} className="p-1.5 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-[#2a2a2a] transition"><Minus size={16}/></button>
+                    <span className="px-2.5 font-semibold text-gray-900 dark:text-white text-sm">{item.cartQuantity}</span>
+                    <button onClick={() => addToCart(item)} disabled={item.cartQuantity >= item.stockQuantity} className="p-1.5 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-[#2a2a2a] transition disabled:opacity-30 disabled:cursor-not-allowed"><Plus size={16}/></button>
+                  </div>
+                  <button 
+                    onClick={() => handleRemoveEntireItem(item)} 
+                    className="p-2 bg-red-50 dark:bg-red-900/20 text-red-500 hover:bg-red-100 dark:hover:bg-red-900/40 rounded-lg border border-transparent hover:border-red-200 dark:hover:border-red-800/50 transition"
+                    title="Remove Item"
+                  >
+                    <Trash2 size={16} />
+                  </button>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+
+        <div className="p-6 border-t border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-[#1e1e1e]">
+          <div className="space-y-2 mb-4 text-sm">
+            <div className="flex justify-between items-center text-gray-600 dark:text-gray-400">
+              <span>Item Total</span>
+              <span className="font-semibold text-gray-900 dark:text-white">₹{cartTotal.toFixed(2)}</span>
+            </div>
+            <div className="flex justify-between items-center text-gray-600 dark:text-gray-400">
+              <span>Delivery Charges</span>
+              <span className="font-semibold">
+                {cartTotal === 0 ? "₹0.00" : (cartTotal < deliveryConfig.freeAbove ? `₹${deliveryConfig.baseFee}.00` : <span className="text-green-600 dark:text-green-500 font-bold uppercase text-xs">FREE</span>)}
+              </span>
             </div>
           </div>
+
+          <div className="flex justify-between items-center mb-3 pt-3 border-t border-gray-200 dark:border-gray-700 text-lg font-bold text-gray-900 dark:text-white">
+            <span>Total Amount</span>
+            <span className="text-green-600 dark:text-green-500">₹{cartTotal === 0 ? "0.00" : finalCartTotalWithDelivery.toFixed(2)}</span>
+          </div>
+
+          <div className="mb-4 text-xs font-semibold text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-950/40 p-2.5 rounded-xl border border-blue-100 dark:border-blue-900/50 flex items-center gap-1.5">
+            <span>🏷️</span>
+            <span>Apply coupons and promo codes on the checkout page</span>
+          </div>
+
+          <button 
+            onClick={() => { 
+              if (!isStoreOpen || cartCount === 0) return;
+              setIsCartOpen(false); 
+              if(!user) { showToast("Login to Checkout!", "error"); handleLogin(); } 
+              else router.push('/checkout'); 
+            }} 
+            disabled={!isStoreOpen || cartCount === 0}
+            className={`w-full py-4 rounded-xl font-bold text-lg transition shadow-md ${
+              isStoreOpen && cartCount > 0
+                ? "bg-green-700 dark:bg-green-600 text-white hover:bg-green-800 dark:hover:bg-green-500" 
+                : "bg-gray-400 dark:bg-gray-700 text-gray-200 cursor-not-allowed"
+            }`}
+          >
+            {!isStoreOpen ? "Checkout Disabled (Store Closed)" : (cartCount === 0 ? "Cart is Empty" : "Proceed to Checkout")}
+          </button>
         </div>
-      )}
+      </div>
+      {/* ========================================================================= */}
 
       {/* PRODUCT DETAILS MODAL */}
       {selectedProduct && (

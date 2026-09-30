@@ -21,6 +21,8 @@ export interface CartContextType {
   cartCount: number;
   isCartOpen: boolean;
   setIsCartOpen: (open: boolean) => void;
+  cartNotice: string | null;
+  setCartNotice: (msg: string | null) => void;
 }
 
 const CartContext = createContext<CartContextType | null>(null);
@@ -28,6 +30,7 @@ const CartContext = createContext<CartContextType | null>(null);
 export function CartProvider({ children }: { children: ReactNode }) {
   const [cart, setCart] = useState<CartItem[]>([]);
   const [isCartOpen, setIsCartOpen] = useState(false);
+  const [cartNotice, setCartNotice] = useState<string | null>(null);
   const [isMounted, setIsMounted] = useState(false);
 
   useEffect(() => {
@@ -48,10 +51,30 @@ export function CartProvider({ children }: { children: ReactNode }) {
     }
   }, [cart, isMounted]);
 
+  const showNotice = (msg: string) => {
+    setCartNotice(msg);
+    setTimeout(() => {
+      setCartNotice(null);
+    }, 4000);
+  };
+
   const addToCart = (product: any) => {
+    const existing = cart.find(item => item.id === product.id);
+    const currentQty = existing ? existing.cartQuantity : 0;
+
+    if (product.stockQuantity <= 0) {
+      showNotice("This item is currently out of stock.");
+      return;
+    }
+
+    if (currentQty + 1 > product.stockQuantity) {
+      showNotice(`Sorry, only ${product.stockQuantity} items left in stock.`);
+      return;
+    }
+
     setCart(prevCart => {
-      const existing = prevCart.find(item => item.id === product.id);
-      if (existing) {
+      const itemExists = prevCart.find(item => item.id === product.id);
+      if (itemExists) {
         return prevCart.map(item => 
           item.id === product.id 
             ? { ...item, cartQuantity: item.cartQuantity + 1 } 
@@ -87,7 +110,7 @@ export function CartProvider({ children }: { children: ReactNode }) {
   const cartCount = cart.reduce((count, item) => count + item.cartQuantity, 0);
 
   return (
-    <CartContext.Provider value={{ cart, addToCart, removeFromCart, clearCart, cartTotal, cartCount, isCartOpen, setIsCartOpen }}>
+    <CartContext.Provider value={{ cart, addToCart, removeFromCart, clearCart, cartTotal, cartCount, isCartOpen, setIsCartOpen, cartNotice, setCartNotice }}>
       {children}
     </CartContext.Provider>
   );

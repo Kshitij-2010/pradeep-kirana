@@ -1,9 +1,10 @@
 "use client";
 
 import { useEffect, useState, useRef } from "react";
-import { collection, query, orderBy, onSnapshot, doc, getDoc, setDoc, updateDoc, addDoc, deleteDoc, serverTimestamp, increment } from "firebase/firestore";
-import { db } from "@/lib/firebase";
-import { MapPin, Phone, ExternalLink, Package, Clock, CheckCircle, Bike, Box, Search, Save, Plus, X, Trash2, Link, Pencil, Calendar, CreditCard, Store, Truck, Lock, Key, TrendingUp, AlertTriangle, Users, Filter, MessageCircle, Star, Tag, Download, Settings, Power } from "lucide-react";
+import { collection, query, orderBy, onSnapshot, doc, getDoc, setDoc, updateDoc, addDoc, deleteDoc, increment } from "firebase/firestore";
+import { signInWithPopup, signOut, onAuthStateChanged } from "firebase/auth";
+import { db, auth, googleProvider } from "@/lib/firebase";
+import { MapPin, Phone, ExternalLink, Package, Clock, CheckCircle, Bike, Box, Search, Save, Plus, X, Trash2, Link, Pencil, Calendar, CreditCard, Store, Truck, Lock, Key, TrendingUp, AlertTriangle, Users, Filter, MessageCircle, Star, Tag, Download, Settings, ShieldCheck } from "lucide-react";
 
 const playNotificationSound = () => {
   try {
@@ -47,17 +48,10 @@ const StockEditor = ({ item }: { item: any }) => {
 
 export default function AdminDashboard() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
-  const [passwordInput, setPasswordInput] = useState("");
-  const [verifying, setVerifying] = useState(false);
+  const [checkingAuth, setCheckingAuth] = useState(true);
 
   // ================= AUTO-LOCK TIMER STATE =================
   const [timeLeft, setTimeLeft] = useState<number>(10800); // 3 hours in seconds
-
-  const [showPasswordModal, setShowPasswordModal] = useState(false);
-  const [oldPassword, setOldPassword] = useState("");
-  const [newPassword, setNewPassword] = useState("");
-  const [confirmPassword, setConfirmPassword] = useState("");
-  const [changingPass, setChangingPass] = useState(false);
 
   // ================= CANCELLATION MODAL STATE =================
   const [showCancelModal, setShowCancelModal] = useState(false);
@@ -103,20 +97,56 @@ export default function AdminDashboard() {
   const [addingCoupon, setAddingCoupon] = useState(false);
 
   const isFirstLoad = useRef(true);
-  // Ref for Glitch Scanner so we don't process the same order twice
   const checkedGlitchesRef = useRef<Set<string>>(new Set());
   
   const categories = ["Atta & Dal", "Snacks", "Dairy", "Spices", "Drinks", "+ Add New Category"];
 
+  // ================= SECURE AUTHENTICATION LISTENER =================
   useEffect(() => {
-    if (sessionStorage.getItem("pradeep_admin_auth") === "true") {
-      setIsAuthenticated(true);
-    }
+    const unsub = onAuthStateChanged(auth, async (user) => {
+      if (user) {
+        try {
+          const userDocRef = doc(db, "users", user.uid);
+          const userDoc = await getDoc(userDocRef);
+          
+          if (userDoc.exists() && userDoc.data().role === "admin") {
+            setIsAuthenticated(true);
+          } else {
+            alert("Access Denied! You do not have Admin privileges.");
+            await signOut(auth);
+            setIsAuthenticated(false);
+          }
+        } catch (error) {
+          console.error("Auth verification failed", error);
+          await signOut(auth);
+          setIsAuthenticated(false);
+        }
+      } else {
+        setIsAuthenticated(false);
+      }
+      setCheckingAuth(false);
+    });
+
     const storedViewedReviews = localStorage.getItem("pradeep_viewed_reviews");
     if (storedViewedReviews) {
       try { setViewedReviewIds(new Set(JSON.parse(storedViewedReviews))); } catch (e) {}
     }
+
+    return () => unsub();
   }, []);
+
+  const handleAdminLogin = async () => {
+    try {
+      await signInWithPopup(auth, googleProvider);
+    } catch (error) {
+      alert("Login failed.");
+    }
+  };
+
+  const handleAdminLogout = async () => {
+    await signOut(auth);
+    setIsAuthenticated(false);
+  };
 
   // ================= AUTO-LOCK TIMER EFFECT =================
   useEffect(() => {
@@ -150,9 +180,9 @@ export default function AdminDashboard() {
     return () => clearInterval(timerInterval);
   }, [isAuthenticated]);
 
-  const handleLockOut = () => {
-    sessionStorage.removeItem("pradeep_admin_auth");
+  const handleLockOut = async () => {
     sessionStorage.removeItem("pradeep_admin_expiry");
+    await signOut(auth);
     setIsAuthenticated(false);
     alert("Admin session expired. Panel has been locked for security. 🔒");
   };
@@ -226,60 +256,34 @@ export default function AdminDashboard() {
     return () => { unsubOrders(); unsubProducts(); unsubReviews(); unsubCoupons(); unsubStoreStatus(); unsubDeliveryConfig(); };
   }, [isAuthenticated]);
 
-  // ================= AUTO-GLITCH SCANNER (NEGATIVE STOCK CHECK) =================
+  // ================= LEGACY READ-ONLY GLITCH SCANNER =================
   useEffect(() => {
-    const scanForGlitchedOrders = async () => {
-      // Kyunki orders newest first sorted hain, jo naya order glitch layega wahi pakda jayega
+    const scanForLegacyGlitchedOrders = async () => {
       for (const order of orders) {
         if (order.status === "Pending" && !checkedGlitchesRef.current.has(order.id)) {
           checkedGlitchesRef.current.add(order.id);
-          
+
           let isGlitched = false;
-          
           for (const item of order.items) {
             const itemRef = doc(db, "items", item.id);
             const itemSnap = await getDoc(itemRef);
-            if (itemSnap.exists()) {
-               // Check if stock went negative (-1, -2) due to race condition glitch
-               if (itemSnap.data().stockQuantity < 0) {
-                  isGlitched = true;
-                  break;
-               }
-            } else {
-               // Agar item database se permanently delete ho chuka hai
+            
+            if (!itemSnap.exists() || itemSnap.data().stockQuantity < 0) {
                isGlitched = true;
                break;
             }
           }
 
           if (isGlitched) {
-            try {
-              const orderRef = doc(db, "orders", order.id);
-              // 1. Restore the stock back to database
-              const restorePromises = order.items.map((item: any) => {
-                return updateDoc(doc(db, "items", item.id), {
-                  stockQuantity: increment(item.cartQuantity)
-                });
-              });
-              await Promise.all(restorePromises);
-
-              // 2. Auto-Cancel the order
-              await updateDoc(orderRef, {
-                status: "Cancelled",
-                cancellationReason: "System Auto-Cancel: Item not in stock"
-              });
-              
-              alert(`⚠️ Glitch Detected & Fixed: Order #${order.orderId || order.id.slice(0,6)} was Auto-Cancelled because an item went out of stock!`);
-            } catch(e) {
-              console.error("Auto-cancel failed", e);
-            }
+             console.warn(`Glitched Order Detected: #${order.orderId || order.id}`);
+             alert(`⚠️ Old Glitch Detected: Order #${order.orderId || order.id.slice(0,6)} mein items out of stock ya delete ho chuke hain. Kripya is order ko list mein jaakar 'Cancel' karein.`);
           }
         }
       }
     };
 
     if (isAuthenticated && orders.length > 0) {
-      scanForGlitchedOrders();
+      scanForLegacyGlitchedOrders();
     }
   }, [orders, isAuthenticated]);
 
@@ -291,42 +295,6 @@ export default function AdminDashboard() {
       localStorage.setItem("pradeep_viewed_reviews", JSON.stringify(Array.from(newSet)));
     }
   }, [activeTab, reviews]);
-
-  const handlePasswordSubmit = async (e: React.FormEvent) => {
-    e.preventDefault(); setVerifying(true);
-    try {
-      const adminDocRef = doc(db, "settings", "admin");
-      const adminSnap = await getDoc(adminDocRef);
-      const correctPassword = adminSnap.exists() ? adminSnap.data().passcode : "admin123";
-      if (!adminSnap.exists()) await setDoc(adminDocRef, { passcode: "admin123" });
-      if (passwordInput === correctPassword) {
-        setIsAuthenticated(true);
-        sessionStorage.setItem("pradeep_admin_auth", "true");
-        sessionStorage.setItem("pradeep_admin_expiry", (Date.now() + 3 * 60 * 60 * 1000).toString());
-      } else { alert("Incorrect Password! ❌"); setPasswordInput(""); }
-    } catch (error) { alert("Auth failed."); }
-    setVerifying(false);
-  };
-
-  const handleChangePasswordSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (newPassword !== confirmPassword) return alert("Passwords do not match! ❌");
-    setChangingPass(true);
-    try {
-      const adminDocRef = doc(db, "settings", "admin");
-      const adminSnap = await getDoc(adminDocRef);
-      if (oldPassword !== (adminSnap.exists() ? adminSnap.data().passcode : "admin123")) {
-        setChangingPass(false); return alert("Incorrect Old Password! ❌");
-      }
-      await updateDoc(adminDocRef, { passcode: newPassword });
-      alert("Password updated! Please login again.");
-      sessionStorage.removeItem("pradeep_admin_auth");
-      sessionStorage.removeItem("pradeep_admin_expiry");
-      setIsAuthenticated(false);
-      setShowPasswordModal(false); setOldPassword(""); setNewPassword(""); setConfirmPassword("");
-    } catch (error) { alert("Failed to update."); }
-    setChangingPass(false);
-  };
 
   const updateOrderStatus = async (orderId: string, newStatus: string) => {
     try {
@@ -445,6 +413,14 @@ export default function AdminDashboard() {
     setSavingTimings(false);
   };
 
+  // ================= CSV EXPORT SECURITY FIX =================
+  const sanitizeCSV = (val: any) => {
+    if (typeof val === 'string' && /^[=+\-@\t\r]/.test(val)) {
+      return "'" + val; // Prevents Formula Injection in Excel
+    }
+    return val;
+  };
+
   const exportSalesToCSV = () => {
     if (orders.length === 0) { alert("No orders to export!"); return; }
     
@@ -455,15 +431,16 @@ export default function AdminDashboard() {
       const date = safeDateStr.replace(new RegExp(',', 'g'), '');
       
       const type = o.customerDetails?.orderType || "Delivery";
-      const name = `"${o.customerDetails?.name || ""}"`; 
+      const name = `"${sanitizeCSV(o.customerDetails?.name || "")}"`; 
+      const phone = sanitizeCSV(o.customerDetails?.phone || "");
       const itemTotal = o.cartTotal || o.totalAmount; 
       const dFee = o.deliveryFee || 0;
       const discount = o.discount || 0;
-      const code = o.promoCodeUsed || "None";
-      const paymentMethod = o.customerDetails?.paymentMethod || o.paymentMethod || "Cash on Delivery";
+      const code = sanitizeCSV(o.promoCodeUsed || "None");
+      const paymentMethod = sanitizeCSV(o.customerDetails?.paymentMethod || o.paymentMethod || "Cash on Delivery");
       const total = o.totalAmount;
       
-      const row = `${o.orderId},${date},${o.status},${type},${name},${o.customerDetails?.phone},${itemTotal},${dFee},${discount},${code},${paymentMethod},${total}`;
+      const row = `${o.orderId},${date},${o.status},${type},${name},${phone},${itemTotal},${dFee},${discount},${code},${paymentMethod},${total}`;
       csvContent += row + "\n";
     });
 
@@ -572,16 +549,21 @@ export default function AdminDashboard() {
     return Array.from(cMap.values()).sort((a, b) => b.totalSpent - a.totalSpent);
   };
 
+  // ================= RENDER LOGIC =================
+  if (checkingAuth) {
+    return <div className="min-h-screen bg-gray-100 dark:bg-[#0a0a0a] flex items-center justify-center"><div className="animate-spin rounded-full h-12 w-12 border-b-2 border-green-600"></div></div>;
+  }
+
   if (!isAuthenticated) {
     return (
       <div className="min-h-screen bg-gray-100 dark:bg-[#0a0a0a] flex items-center justify-center p-4">
-        <div className="bg-white dark:bg-[#121212] p-8 rounded-2xl shadow-xl w-full max-w-md border border-gray-200 dark:border-gray-800 animate-in fade-in zoom-in">
-          <Lock className="mx-auto text-green-600 mb-4" size={32} />
-          <h1 className="text-2xl font-extrabold text-center text-gray-900 dark:text-white mb-6">Admin Restricted</h1>
-          <form onSubmit={handlePasswordSubmit} className="space-y-4">
-            <input type="password" placeholder="Enter Admin Password" value={passwordInput} onChange={(e) => setPasswordInput(e.target.value)} className="w-full p-3.5 border border-gray-300 dark:border-gray-700 rounded-xl bg-gray-50 dark:bg-[#1a1a1a] text-gray-900 dark:text-white text-center font-bold tracking-widest outline-none focus:ring-2 focus:ring-green-500 transition" required autoFocus />
-            <button type="submit" disabled={verifying} className="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-3.5 rounded-xl transition">{verifying ? "Verifying..." : "Unlock Admin Panel"}</button>
-          </form>
+        <div className="bg-white dark:bg-[#121212] p-8 rounded-2xl shadow-xl w-full max-w-md border border-gray-200 dark:border-gray-800 animate-in fade-in zoom-in text-center">
+          <ShieldCheck className="mx-auto text-green-600 mb-4" size={48} />
+          <h1 className="text-2xl font-extrabold text-gray-900 dark:text-white mb-2">Secure Admin Access</h1>
+          <p className="text-sm text-gray-500 mb-6">Login with your authorized Google Account to manage the store.</p>
+          <button onClick={handleAdminLogin} className="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-3.5 rounded-xl transition flex items-center justify-center gap-2">
+            <Lock size={18} /> Sign In with Google
+          </button>
         </div>
       </div>
     );
@@ -604,15 +586,15 @@ export default function AdminDashboard() {
           </div>
         </div>
 
-        {/* HEADER (Redesigned for Mobile Space Saving) */}
+        {/* HEADER */}
         <header className="bg-white dark:bg-[#121212] p-4 md:p-6 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-800 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
           <div>
             <h1 className="text-xl md:text-3xl font-extrabold text-gray-900 dark:text-white">Admin Dashboard</h1>
-            <p className="text-xs md:text-sm text-gray-500 dark:text-gray-400 font-medium mt-1">Manage everything from one place</p>
+            <p className="text-xs md:text-sm text-gray-500 dark:text-gray-400 font-medium mt-1">Manage everything securely</p>
           </div>
           
           <div className="flex flex-col md:flex-row gap-3 w-full md:w-auto">
-            {/* Toggles Row (2 columns on mobile) */}
+            {/* Toggles Row */}
             <div className="grid grid-cols-2 gap-2 w-full md:w-auto md:flex md:gap-3">
               {/* Store Status Toggle */}
               <div className="flex items-center justify-between md:justify-start gap-2 bg-gray-50 dark:bg-[#1a1a1a] p-2 md:px-4 md:py-2 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm">
@@ -637,15 +619,14 @@ export default function AdminDashboard() {
               </div>
             </div>
 
-            {/* Buttons Row (2 columns on mobile) */}
-            <div className="grid grid-cols-2 gap-2 w-full md:w-auto md:flex md:gap-3">
-              <button onClick={() => setShowPasswordModal(true)} className="justify-center text-[10px] md:text-xs bg-blue-50 dark:bg-blue-900/20 hover:bg-blue-100 dark:hover:bg-blue-900/40 text-blue-600 dark:text-blue-400 font-bold px-3 py-2.5 md:px-4 md:py-3 rounded-xl border border-blue-200 dark:border-blue-800/40 flex items-center gap-1.5 transition"><Key size={14} /> Change Pass</button>
-              <button onClick={() => { sessionStorage.removeItem("pradeep_admin_auth"); sessionStorage.removeItem("pradeep_admin_expiry"); setIsAuthenticated(false); }} className="justify-center text-[10px] md:text-xs bg-red-50 dark:bg-red-900/20 hover:bg-red-100 dark:hover:bg-red-900/40 text-red-600 dark:text-red-400 font-bold px-3 py-2.5 md:px-4 md:py-3 rounded-xl border border-red-200 dark:border-red-800/40 flex items-center gap-1.5 transition"><Lock size={14} /> Lock Panel</button>
+            {/* Buttons Row */}
+            <div className="grid grid-cols-1 gap-2 w-full md:w-auto md:flex md:gap-3">
+              <button onClick={handleAdminLogout} className="justify-center text-[10px] md:text-xs bg-red-50 dark:bg-red-900/20 hover:bg-red-100 dark:hover:bg-red-900/40 text-red-600 dark:text-red-400 font-bold px-3 py-2.5 md:px-4 md:py-3 rounded-xl border border-red-200 dark:border-red-800/40 flex items-center gap-1.5 transition"><Lock size={14} /> Secure Logout</button>
             </div>
           </div>
         </header>
 
-        {/* ANALYTICS (2x2 Grid on Mobile to save space) */}
+        {/* ANALYTICS */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4">
           <div className="bg-white dark:bg-[#121212] p-3 md:p-5 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-800 flex flex-col justify-center relative">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between mb-1 gap-1">
@@ -661,7 +642,7 @@ export default function AdminDashboard() {
           <div className={`bg-white dark:bg-[#121212] p-3 md:p-5 rounded-2xl shadow-sm border ${lowStockItems.length > 0 ? 'border-red-300 dark:border-red-800 bg-red-50/50 dark:bg-red-900/20' : 'border-gray-200 dark:border-gray-800'} flex flex-col justify-center`}><div className="flex items-center gap-1.5 text-red-500 mb-1"><AlertTriangle size={16} className="md:w-[18px]" /><span className="text-[10px] md:text-xs font-bold uppercase tracking-wide leading-tight">Low Stock</span></div><p className="text-lg md:text-2xl font-extrabold text-gray-900 dark:text-white">{lowStockItems.length} <span className="text-[10px] md:text-sm text-gray-500 font-medium">items</span></p></div>
         </div>
 
-        {/* TABS (Horizontally scrollable on mobile) */}
+        {/* TABS */}
         <div className="bg-white dark:bg-[#121212] p-2 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-800 flex overflow-x-auto gap-2 w-full [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
           <button onClick={() => setActiveTab("orders")} className={`shrink-0 flex items-center justify-center gap-2 px-4 py-2.5 md:py-3 rounded-xl text-sm font-bold transition ${activeTab === "orders" ? "bg-green-50 dark:bg-green-900/30 text-green-700 dark:text-green-400 border border-green-200 dark:border-green-800/50" : "text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-[#1a1a1a]"}`}><Package size={18} /> Orders</button>
           <button onClick={() => setActiveTab("inventory")} className={`shrink-0 flex items-center justify-center gap-2 px-4 py-2.5 md:py-3 rounded-xl text-sm font-bold transition ${activeTab === "inventory" ? "bg-green-50 dark:bg-green-900/30 text-green-700 dark:text-green-400 border border-green-200 dark:border-green-800/50" : "text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-[#1a1a1a]"}`}><Box size={18} /> Inventory</button>
@@ -715,12 +696,9 @@ export default function AdminDashboard() {
                                   <p className="text-2xl font-extrabold text-green-600 dark:text-green-500">₹{order.totalAmount}</p>
                                   {order.promoCodeUsed && <p className="text-[10px] text-green-600 dark:text-green-400 bg-green-50 dark:bg-green-900/20 px-2 py-0.5 rounded border border-green-200 dark:border-green-800/50 font-bold uppercase mt-1">Promo: {order.promoCodeUsed}</p>}
                                   <p className="text-[10px] text-gray-500 dark:text-gray-400 font-bold uppercase mt-1">Delivery: {order.deliveryFee === 0 ? "FREE" : `₹${order.deliveryFee}`}</p>
-                                  
-                                  {/* Payment Method Badge */}
                                   <p className="text-[10px] font-extrabold text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/20 px-2.5 py-1 rounded-md border border-blue-200 dark:border-blue-800/50 uppercase mt-1">
                                     💳 {order.customerDetails?.paymentMethod || order.paymentMethod || "Cash on Delivery"}
                                   </p>
-
                                   {!isPickup && order.customerDetails?.mapLink && <a href={order.customerDetails.mapLink} target="_blank" rel="noreferrer" className="flex items-center gap-1 bg-blue-50 dark:bg-blue-900/20 hover:bg-blue-100 dark:hover:bg-blue-900/40 text-blue-600 dark:text-blue-400 px-3 py-1.5 rounded-lg text-sm font-bold border border-blue-200 dark:border-blue-800/50 transition mt-2"><ExternalLink size={14} /> Open Map</a>}
                                 </div>
                               </div>
@@ -1017,33 +995,6 @@ export default function AdminDashboard() {
                 </button>
               </div>
             </div>
-          </div>
-        </div>
-      )}
-
-      {/* ================= MODALS ================= */}
-      {showPasswordModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-          <div className="bg-white dark:bg-[#121212] w-full max-w-md rounded-2xl shadow-2xl overflow-hidden border border-gray-200 dark:border-gray-800">
-            <div className="p-4 border-b border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-[#1e1e1e] flex justify-between items-center">
-              <h2 className="text-lg md:text-xl font-bold text-gray-900 dark:text-white flex items-center gap-2"><Key size={20} className="text-blue-500" /> Change Password</h2>
-              <button onClick={() => setShowPasswordModal(false)} className="p-1 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-full text-gray-500"><X size={20} /></button>
-            </div>
-            <form onSubmit={handleChangePasswordSubmit} className="p-4 md:p-5 space-y-4">
-              <div>
-                <label className="block text-sm font-semibold mb-1 text-gray-700 dark:text-gray-300">Old Password</label>
-                <input required type="password" value={oldPassword} onChange={(e) => setOldPassword(e.target.value)} className="w-full border border-gray-300 dark:border-gray-700 rounded-lg p-2.5 bg-gray-50 dark:bg-[#1a1a1a] text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-blue-500 transition" />
-              </div>
-              <div>
-                <label className="block text-sm font-semibold mb-1 text-gray-700 dark:text-gray-300">New Password</label>
-                <input required type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} className="w-full border border-gray-300 dark:border-gray-700 rounded-lg p-2.5 bg-gray-50 dark:bg-[#1a1a1a] text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-blue-500 transition" />
-              </div>
-              <div>
-                <label className="block text-sm font-semibold mb-1 text-gray-700 dark:text-gray-300">Confirm New Password</label>
-                <input required type="password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} className="w-full border border-gray-300 dark:border-gray-700 rounded-lg p-2.5 bg-gray-50 dark:bg-[#1a1a1a] text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-blue-500 transition" />
-              </div>
-              <button type="submit" disabled={changingPass} className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-lg mt-2 transition">{changingPass ? "Updating..." : "Update Password"}</button>
-            </form>
           </div>
         </div>
       )}

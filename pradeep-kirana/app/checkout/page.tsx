@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { collection, addDoc, serverTimestamp, doc, getDoc, setDoc, onSnapshot, updateDoc, increment, query, where, getDocs } from "firebase/firestore";
+import { collection, doc, getDoc, setDoc, onSnapshot, query, where, getDocs } from "firebase/firestore";
 import { onAuthStateChanged } from "firebase/auth";
 import { db, auth } from "@/lib/firebase";
 import { useCart } from "@/context/CartContext";
@@ -18,7 +18,7 @@ export default function CheckoutPage() {
   
   const [storeStatus, setStoreStatus] = useState({ deliveryPaused: false });
   
-  // ================= DYNAMIC DELIVERY CONFIG FROM DB (DEFAULT 10 & 100) =================
+  // ================= DYNAMIC DELIVERY CONFIG FROM DB =================
   const [deliveryConfig, setDeliveryConfig] = useState({ baseFee: 10, freeAbove: 100 });
 
   const [locationCoords, setLocationCoords] = useState<{lat: number, lng: number} | null>(null);
@@ -29,7 +29,7 @@ export default function CheckoutPage() {
   const [promoError, setPromoError] = useState("");
   const [checkingPromo, setCheckingPromo] = useState(false);
 
-  // Dynamic Delivery Fee calculation based on admin settings
+  // UI Calculation (Actual calculation happens securely on the backend)
   const deliveryFee = (cartTotal < deliveryConfig.freeAbove) ? deliveryConfig.baseFee : 0;
   
   const [formData, setFormData] = useState({
@@ -72,7 +72,6 @@ export default function CheckoutPage() {
       }
     });
 
-    // Listen to delivery configuration from Admin Settings
     const unsubDeliveryConfig = onSnapshot(doc(db, "settings", "deliveryConfig"), (docSnap) => {
       if (docSnap.exists()) {
         const data = docSnap.data() as any;
@@ -146,6 +145,7 @@ export default function CheckoutPage() {
     );
   }
 
+  // ================= SECURE ORDER PLACEMENT =================
   const handlePlaceOrder = async (e: any) => {
     e.preventDefault();
     if (!user) { alert("Please login first to place an order."); return; }
@@ -154,13 +154,12 @@ export default function CheckoutPage() {
     setLoading(true);
 
     try {
-      // ================= RESTRICT ONLY WHEN AWAITING CONFIRMATION =================
+      // 1. Verify if user has an active order waiting for confirmation
       const qActive = query(collection(db, "orders"), where("customerId", "==", user.uid));
       const activeSnapshot = await getDocs(qActive);
       
       const hasUnconfirmedOrder = activeSnapshot.docs.some(docSnap => {
         const status = docSnap.data().status;
-        // Restrict only if the previous order is waiting for customer confirmation
         return status === "Awaiting Confirmation" || status === "Awaiting Pickup Confirmation";
       });
 
@@ -169,45 +168,50 @@ export default function CheckoutPage() {
         setLoading(false);
         return;
       }
-      // =========================================================================
 
-      const uniqueOrderId = "ORD-" + Math.floor(100000 + Math.random() * 900000);
+      // 2. Prepare Secure Payload (Only send item IDs and quantities, backend checks price & stock)
+      const orderPayload = {
+        items: cart.map((item: any) => ({
+          id: item.id,
+          cartQuantity: item.cartQuantity
+        })),
+        couponCode: appliedPromo ? appliedPromo.code : null,
+        uid: user.uid,
+        customerDetails: formData
+      };
 
-      await addDoc(collection(db, "orders"), {
-        orderId: uniqueOrderId, 
-        customerId: user.uid,
-        customerDetails: formData, 
-        items: cart,
-        cartTotal: cartTotal,
-        deliveryFee: actualDeliveryFee,
-        discount: discountAmount,
-        promoCodeUsed: appliedPromo ? appliedPromo.code : null,
-        totalAmount: finalTotal, 
-        status: "Pending", 
-        orderDate: serverTimestamp(),
+      // 3. Send to Server securely
+      const response = await fetch('/api/checkout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(orderPayload)
       });
 
-      const stockUpdatePromises = cart.map((item: any) => {
-        return updateDoc(doc(db, "items", item.id), {
-          stockQuantity: increment(-item.cartQuantity)
-        });
-      });
-      await Promise.all(stockUpdatePromises);
+      const data = await response.json();
 
+      if (!response.ok || !data.success) {
+        throw new Error(data.error || "Transaction failed");
+      }
+
+      // 4. If address save is checked, securely update user profile
       if (saveAddress && formData.orderType === "Delivery") {
         await setDoc(doc(db, "users", user.uid), {
-          name: formData.name, phone: formData.phone, address: formData.address, mapLink: formData.mapLink,
-          lat: locationCoords?.lat || null, lng: locationCoords?.lng || null
+          name: formData.name, 
+          phone: formData.phone, 
+          address: formData.address, 
+          mapLink: formData.mapLink,
+          lat: locationCoords?.lat || null, 
+          lng: locationCoords?.lng || null
         }, { merge: true });
       }
 
-      alert(`Order Successfully Placed! 🎉\nYour Order ID is: ${uniqueOrderId}`);
+      alert(`✅ Order Successfully Placed!\nEverything has been verified securely.`);
       if(clearCart) clearCart(); 
       router.push("/orders");
       
-    } catch (error) { 
+    } catch (error: any) { 
       console.error("Order failed:", error);
-      alert("Something went wrong. Please try again."); 
+      alert(`❌ Order failed: ${error.message}`); 
     }
     setLoading(false);
   };
@@ -356,7 +360,9 @@ export default function CheckoutPage() {
           </div>
 
           <button type="submit" disabled={loading} className="w-full bg-green-700 dark:bg-green-600 text-white py-4 rounded-xl font-bold text-lg hover:bg-green-800 dark:hover:bg-green-500 transition shadow-lg mt-6 flex justify-center items-center">
-            {loading ? "Placing Order..." : `Place Order • ₹${finalTotal.toFixed(2)}`}
+            {loading ? (
+              <div className="flex items-center gap-2"><div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div> Verifying & Placing...</div>
+            ) : `Place Order • ₹${finalTotal.toFixed(2)}`}
           </button>
         </form>
       </div>
