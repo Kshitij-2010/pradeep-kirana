@@ -6,7 +6,7 @@ import { onAuthStateChanged } from "firebase/auth";
 import { db, auth } from "@/lib/firebase";
 import { useCart } from "@/context/CartContext";
 import { useRouter } from "next/navigation";
-import { MapPin, Navigation2, CheckCircle2, Banknote, QrCode, Store, Truck, AlertTriangle, Tag } from "lucide-react";
+import { MapPin, Navigation2, CheckCircle2, Banknote, QrCode, Store, Truck, AlertTriangle, Tag, X } from "lucide-react";
 
 export default function CheckoutPage() {
   const { cart, cartTotal, clearCart } = useCart() as any;
@@ -16,21 +16,41 @@ export default function CheckoutPage() {
   const [loading, setLoading] = useState(false);
   const [fetchingLocation, setFetchingLocation] = useState(false);
   
-  const [storeStatus, setStoreStatus] = useState({ deliveryPaused: false });
-  
-  // ================= DYNAMIC DELIVERY CONFIG FROM DB =================
+  const [storeStatus, setStoreStatus] = useState({
+    deliveryPaused: false,
+    storePaused: false,
+    autoTimeEnabled: false,
+    openTime: "09:00",
+    closeTime: "21:00"
+  });
+  const [isStoreOpen, setIsStoreOpen] = useState(true);
+
+  // Modern UI Toast Notification State (Replaces native browser alerts)
+  const [toast, setToast] = useState<{ show: boolean; message: string; type: "success" | "error" | "info" }>({
+    show: false,
+    message: "",
+    type: "info"
+  });
+
+  const showToast = (message: string, type: "success" | "error" | "info" = "info") => {
+    setToast({ show: true, message, type });
+    setTimeout(() => {
+      setToast(prev => ({ ...prev, show: false }));
+    }, 4000);
+  };
+
+  // Delivery Configuration
   const [deliveryConfig, setDeliveryConfig] = useState({ baseFee: 10, freeAbove: 100 });
 
-  const [locationCoords, setLocationCoords] = useState<{lat: number, lng: number} | null>(null);
+  const [locationCoords, setLocationCoords] = useState<{ lat: number; lng: number } | null>(null);
   const [saveAddress, setSaveAddress] = useState(true); 
   
   const [promoCode, setPromoCode] = useState("");
-  const [appliedPromo, setAppliedPromo] = useState<{code: string, discount: number} | null>(null);
+  const [appliedPromo, setAppliedPromo] = useState<{ code: string; discount: number } | null>(null);
   const [promoError, setPromoError] = useState("");
   const [checkingPromo, setCheckingPromo] = useState(false);
 
-  // UI Calculation (Actual calculation happens securely on the backend)
-  const deliveryFee = (cartTotal < deliveryConfig.freeAbove) ? deliveryConfig.baseFee : 0;
+  const deliveryFee = cartTotal < deliveryConfig.freeAbove ? deliveryConfig.baseFee : 0;
   
   const [formData, setFormData] = useState({
     name: "",
@@ -40,6 +60,28 @@ export default function CheckoutPage() {
     paymentMethod: "Cash on Delivery",
     orderType: "Delivery" 
   });
+
+  // Helper to determine if store is open based on status and auto timings
+  const checkStoreTimings = (statusData: any) => {
+    if (!statusData) return true;
+    if (statusData.storePaused) return false;
+
+    if (statusData.autoTimeEnabled && statusData.openTime && statusData.closeTime) {
+      const now = new Date();
+      const current = now.getHours() * 60 + now.getMinutes();
+      const [oh, om] = statusData.openTime.split(":").map(Number);
+      const [ch, cm] = statusData.closeTime.split(":").map(Number);
+      const open = oh * 60 + om;
+      const close = ch * 60 + cm;
+
+      if (close < open) {
+        return current >= open || current <= close;
+      } else {
+        return current >= open && current <= close;
+      }
+    }
+    return true;
+  };
 
   useEffect(() => {
     const unsubscribeAuth = onAuthStateChanged(auth, async (currentUser) => {
@@ -64,11 +106,25 @@ export default function CheckoutPage() {
       }
     });
 
+    // Realtime Store Status & Forced Browsing Blocker
     const unsubStoreStatus = onSnapshot(doc(db, "settings", "storeStatus"), (docSnap) => {
       if (docSnap.exists()) {
         const data = docSnap.data() as any;
         setStoreStatus(data);
-        if (data.deliveryPaused) setFormData(prev => ({ ...prev, orderType: "Pickup" }));
+
+        const open = checkStoreTimings(data);
+        setIsStoreOpen(open);
+
+        if (!open) {
+          showToast("Store is currently closed. Redirecting to home...", "error");
+          setTimeout(() => {
+            router.push("/");
+          }, 2500);
+        }
+
+        if (data.deliveryPaused) {
+          setFormData(prev => ({ ...prev, orderType: "Pickup" }));
+        }
       }
     });
 
@@ -82,11 +138,18 @@ export default function CheckoutPage() {
       }
     });
 
-    return () => { unsubscribeAuth(); unsubStoreStatus(); unsubDeliveryConfig(); };
-  }, []);
+    return () => {
+      unsubscribeAuth();
+      unsubStoreStatus();
+      unsubDeliveryConfig();
+    };
+  }, [router]);
 
   const handleGetLocation = () => {
-    if (!navigator.geolocation) { alert("Your browser does not support location features."); return; }
+    if (!navigator.geolocation) {
+      showToast("Your browser does not support location features.", "error");
+      return;
+    }
     setFetchingLocation(true);
     navigator.geolocation.getCurrentPosition(
       (position) => {
@@ -95,8 +158,12 @@ export default function CheckoutPage() {
         setLocationCoords({ lat, lng });
         setFormData({ ...formData, mapLink: `https://www.google.com/maps?q=${lat},${lng}` });
         setFetchingLocation(false);
+        showToast("Live location attached successfully.", "success");
       },
-      (error) => { alert("Please allow location permissions."); setFetchingLocation(false); }
+      () => {
+        showToast("Please allow location permissions in your browser.", "error");
+        setFetchingLocation(false);
+      }
     );
   };
 
@@ -120,9 +187,12 @@ export default function CheckoutPage() {
         } else {
           setAppliedPromo({ code: couponData.code, discount: couponData.discountAmount });
           setPromoError("");
+          showToast(`Coupon '${couponData.code}' applied successfully!`, "success");
         }
       }
-    } catch (err) { setPromoError("Failed to verify code."); }
+    } catch (err) {
+      setPromoError("Failed to verify code.");
+    }
     setCheckingPromo(false);
   };
 
@@ -130,6 +200,7 @@ export default function CheckoutPage() {
     setAppliedPromo(null);
     setPromoCode("");
     setPromoError("");
+    showToast("Promo code removed.", "info");
   };
 
   const actualDeliveryFee = formData.orderType === "Delivery" ? deliveryFee : 0;
@@ -140,7 +211,9 @@ export default function CheckoutPage() {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center bg-gray-50 dark:bg-[#0a0a0a] transition-colors duration-300">
         <h2 className="text-2xl font-bold mb-4 text-gray-900 dark:text-white">Your Cart is Empty!</h2>
-        <button onClick={() => router.push('/')} className="bg-green-700 dark:bg-green-600 text-white px-6 py-2 rounded-lg font-bold hover:bg-green-800 transition">Back to Store</button>
+        <button onClick={() => router.push("/")} className="bg-green-700 dark:bg-green-600 text-white px-6 py-2 rounded-lg font-bold hover:bg-green-800 transition">
+          Back to Store
+        </button>
       </div>
     );
   }
@@ -148,14 +221,27 @@ export default function CheckoutPage() {
   // ================= SECURE ORDER PLACEMENT =================
   const handlePlaceOrder = async (e: any) => {
     e.preventDefault();
-    if (!user) { alert("Please login first to place an order."); return; }
-    if (storeStatus.deliveryPaused && formData.orderType === "Delivery") { alert("Home Delivery is currently paused. Please select Store Pickup."); return; }
+
+    if (!isStoreOpen || storeStatus.storePaused) {
+      showToast("Store is currently closed. Cannot accept orders right now.", "error");
+      return;
+    }
+
+    if (!user || !auth.currentUser) {
+      showToast("Please login first to place an order.", "error");
+      return;
+    }
+
+    if (storeStatus.deliveryPaused && formData.orderType === "Delivery") {
+      showToast("Home Delivery is currently paused. Please select Store Pickup.", "error");
+      return;
+    }
 
     setLoading(true);
 
     try {
-      // 1. Verify if user has an active order waiting for confirmation
-      const qActive = query(collection(db, "orders"), where("customerId", "==", user.uid));
+      // 1. Check if user has an active order waiting for confirmation
+      const qActive = query(collection(db, "orders"), where("customerId", "==", auth.currentUser.uid));
       const activeSnapshot = await getDocs(qActive);
       
       const hasUnconfirmedOrder = activeSnapshot.docs.some(docSnap => {
@@ -164,26 +250,31 @@ export default function CheckoutPage() {
       });
 
       if (hasUnconfirmedOrder) {
-        alert("You have an order awaiting your confirmation! Please confirm receipt of your previous order before placing a new one.");
+        showToast("You have an order awaiting confirmation. Please confirm your previous package first.", "error");
         setLoading(false);
         return;
       }
 
-      // 2. Prepare Secure Payload (Only send item IDs and quantities, backend checks price & stock)
+      // 2. Prepare payload
       const orderPayload = {
         items: cart.map((item: any) => ({
           id: item.id,
           cartQuantity: item.cartQuantity
         })),
         couponCode: appliedPromo ? appliedPromo.code : null,
-        uid: user.uid,
         customerDetails: formData
       };
 
-      // 3. Send to Server securely
-      const response = await fetch('/api/checkout', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+      // 3. Get Firebase ID Token for Authorization Header
+      const idToken = await auth.currentUser.getIdToken(true);
+
+      // 4. Dispatch to secure API route
+      const response = await fetch("/api/checkout", {
+        method: "POST",
+        headers: { 
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${idToken}` 
+        },
         body: JSON.stringify(orderPayload)
       });
 
@@ -193,34 +284,75 @@ export default function CheckoutPage() {
         throw new Error(data.error || "Transaction failed");
       }
 
-      // 4. If address save is checked, securely update user profile
+      // 5. Update address securely if opted (using strict fields allowed by rules)
       if (saveAddress && formData.orderType === "Delivery") {
-        await setDoc(doc(db, "users", user.uid), {
+        await setDoc(doc(db, "users", auth.currentUser.uid), {
           name: formData.name, 
           phone: formData.phone, 
           address: formData.address, 
-          mapLink: formData.mapLink,
-          lat: locationCoords?.lat || null, 
-          lng: locationCoords?.lng || null
+          photoURL: auth.currentUser.photoURL || "",
+          updatedAt: new Date()
+          // Note: mapLink, lat, lng removed as per strict Firestore rules allowed fields
         }, { merge: true });
       }
 
-      alert(`✅ Order Successfully Placed!\nEverything has been verified securely.`);
-      if(clearCart) clearCart(); 
-      router.push("/orders");
+      showToast("Order placed successfully! Redirecting to orders...", "success");
+      if (clearCart) clearCart(); 
+      setTimeout(() => {
+        router.push("/orders");
+      }, 1500);
       
     } catch (error: any) { 
       console.error("Order failed:", error);
-      alert(`❌ Order failed: ${error.message}`); 
+      showToast(error.message || "Failed to process order. Please try again.", "error"); 
     }
     setLoading(false);
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-[#0a0a0a] p-4 md:p-8 transition-colors duration-300">
+    <div className="min-h-screen bg-gray-50 dark:bg-[#0a0a0a] p-4 md:p-8 transition-colors duration-300 relative">
+      
+      {/* Modern UI Toast Banner */}
+      {toast.show && (
+        <div className={`fixed top-5 left-1/2 transform -translate-x-1/2 z-[100] w-11/12 max-w-md p-4 rounded-2xl shadow-2xl flex items-center justify-between border animate-in slide-in-from-top-5 duration-300 ${
+          toast.type === "error"
+            ? "bg-red-600 text-white border-red-400"
+            : toast.type === "success"
+            ? "bg-green-600 text-white border-green-400"
+            : "bg-blue-600 text-white border-blue-400"
+        }`}>
+          <div className="flex items-center gap-3">
+            <div className="p-2 bg-white/20 rounded-full shrink-0">
+              {toast.type === "error" ? <AlertTriangle size={20} /> : <CheckCircle2 size={20} />}
+            </div>
+            <div>
+              <p className="text-xs font-bold uppercase tracking-wider opacity-90">Notification</p>
+              <p className="text-sm font-extrabold leading-tight">{toast.message}</p>
+            </div>
+          </div>
+          <button onClick={() => setToast(prev => ({ ...prev, show: false }))} className="p-1 hover:bg-black/20 rounded-full transition shrink-0">
+            <X size={18} />
+          </button>
+        </div>
+      )}
+
       <div className="max-w-2xl mx-auto bg-white dark:bg-[#121212] p-6 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-800 transition-colors">
-        <h1 className="text-2xl font-extrabold mb-6 border-b border-gray-200 dark:border-gray-800 pb-4 text-gray-900 dark:text-white">Checkout</h1>
         
+        <h1 className="text-2xl font-extrabold mb-4 border-b border-gray-200 dark:border-gray-800 pb-4 text-gray-900 dark:text-white">
+          Checkout
+        </h1>
+
+        {/* Store Closed Warning Banner */}
+        {!isStoreOpen && (
+          <div className="mb-6 bg-red-100 dark:bg-red-900/40 border border-red-200 dark:border-red-800/60 p-4 rounded-xl flex items-center gap-3 text-red-800 dark:text-red-300">
+            <Store size={22} className="shrink-0 text-red-600 dark:text-red-400" />
+            <div>
+              <p className="text-sm font-bold">Store is currently closed.</p>
+              <p className="text-xs text-red-700 dark:text-red-400 mt-0.5">We are not accepting orders right now. Redirecting you to home...</p>
+            </div>
+          </div>
+        )}
+
         {/* Order Summary */}
         <div className="mb-6 bg-gray-50 dark:bg-[#1e1e1e] p-4 rounded-xl border border-gray-200 dark:border-gray-700 transition-colors">
           <h2 className="font-bold text-lg mb-3 text-gray-900 dark:text-white">Order Summary</h2>
@@ -240,11 +372,15 @@ export default function CheckoutPage() {
             <div className="flex justify-between">
               <span>Delivery Fee:</span>
               {formData.orderType === "Pickup" ? (
-                 <span className="text-green-600 dark:text-green-500 font-bold border border-green-200 dark:border-green-800/50 bg-green-50 dark:bg-green-900/20 px-2 py-0.5 rounded text-[10px] uppercase">Free (Pickup)</span>
+                <span className="text-green-600 dark:text-green-500 font-bold border border-green-200 dark:border-green-800/50 bg-green-50 dark:bg-green-900/20 px-2 py-0.5 rounded text-[10px] uppercase">
+                  Free (Pickup)
+                </span>
               ) : deliveryFee === 0 ? (
-                 <span className="text-green-600 dark:text-green-500 font-bold border border-green-200 dark:border-green-800/50 bg-green-50 dark:bg-green-900/20 px-2 py-0.5 rounded text-[10px] uppercase">Free Delivery</span>
+                <span className="text-green-600 dark:text-green-500 font-bold border border-green-200 dark:border-green-800/50 bg-green-50 dark:bg-green-900/20 px-2 py-0.5 rounded text-[10px] uppercase">
+                  Free Delivery
+                </span>
               ) : (
-                 <span className="font-semibold">₹{deliveryFee.toFixed(2)}</span>
+                <span className="font-semibold">₹{deliveryFee.toFixed(2)}</span>
               )}
             </div>
 
@@ -257,29 +393,43 @@ export default function CheckoutPage() {
           </div>
 
           <div className="border-t border-gray-200 dark:border-gray-700 mt-3 pt-3 flex justify-between font-bold text-lg text-gray-900 dark:text-white">
-            <span>Total Payable:</span><span className="text-green-700 dark:text-green-500">₹{finalTotal.toFixed(2)}</span>
+            <span>Total Payable:</span>
+            <span className="text-green-700 dark:text-green-500">₹{finalTotal.toFixed(2)}</span>
           </div>
 
           {/* Promo Code Section */}
           <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700">
-             {appliedPromo ? (
-               <div className="flex items-center justify-between bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800/50 p-3 rounded-lg">
-                 <div className="flex items-center gap-2 text-green-700 dark:text-green-400 font-bold text-sm">
-                   <Tag size={16} /> '{appliedPromo.code}' Applied!
-                 </div>
-                 <button onClick={removePromoCode} className="text-xs text-red-500 hover:underline font-bold">Remove</button>
-               </div>
-             ) : (
-               <div>
-                 <div className="flex gap-2">
-                   <input type="text" placeholder="Enter Promo Code" value={promoCode} onChange={(e) => setPromoCode(e.target.value.toUpperCase())} className="w-full border border-gray-300 dark:border-gray-700 rounded-lg px-3 py-2 bg-white dark:bg-[#121212] text-gray-900 dark:text-white text-sm focus:ring-2 focus:ring-green-500 outline-none uppercase" />
-                   <button type="button" onClick={applyPromoCode} disabled={checkingPromo || !promoCode} className="bg-gray-800 dark:bg-gray-700 text-white px-4 py-2 rounded-lg text-sm font-bold disabled:opacity-50 transition">
-                     {checkingPromo ? "..." : "Apply"}
-                   </button>
-                 </div>
-                 {promoError && <p className="text-xs text-red-500 mt-1 font-medium">{promoError}</p>}
-               </div>
-             )}
+            {appliedPromo ? (
+              <div className="flex items-center justify-between bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800/50 p-3 rounded-lg">
+                <div className="flex items-center gap-2 text-green-700 dark:text-green-400 font-bold text-sm">
+                  <Tag size={16} /> '{appliedPromo.code}' Applied!
+                </div>
+                <button onClick={removePromoCode} className="text-xs text-red-500 hover:underline font-bold">
+                  Remove
+                </button>
+              </div>
+            ) : (
+              <div>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    placeholder="Enter Promo Code"
+                    value={promoCode}
+                    onChange={(e) => setPromoCode(e.target.value.toUpperCase())}
+                    className="w-full border border-gray-300 dark:border-gray-700 rounded-lg px-3 py-2 bg-white dark:bg-[#121212] text-gray-900 dark:text-white text-sm focus:ring-2 focus:ring-green-500 outline-none uppercase"
+                  />
+                  <button
+                    type="button"
+                    onClick={applyPromoCode}
+                    disabled={checkingPromo || !promoCode}
+                    className="bg-gray-800 dark:bg-gray-700 text-white px-4 py-2 rounded-lg text-sm font-bold disabled:opacity-50 transition"
+                  >
+                    {checkingPromo ? "..." : "Apply"}
+                  </button>
+                </div>
+                {promoError && <p className="text-xs text-red-500 mt-1 font-medium">{promoError}</p>}
+              </div>
+            )}
           </div>
         </div>
 
@@ -288,24 +438,55 @@ export default function CheckoutPage() {
           <div className="mb-6">
             <label className="block text-sm font-semibold mb-3 text-gray-800 dark:text-gray-300">Order Preference</label>
             {storeStatus.deliveryPaused && (
-               <div className="mb-3 bg-red-50 dark:bg-red-900/20 p-3 rounded-lg border border-red-200 dark:border-red-800/50 flex items-start gap-2">
-                 <AlertTriangle className="text-red-500 shrink-0 mt-0.5" size={16} />
-                 <p className="text-xs font-bold text-red-700 dark:text-red-400">Home delivery is currently paused. Only store pickup is available.</p>
-               </div>
+              <div className="mb-3 bg-red-50 dark:bg-red-900/20 p-3 rounded-lg border border-red-200 dark:border-red-800/50 flex items-start gap-2">
+                <AlertTriangle className="text-red-500 shrink-0 mt-0.5" size={16} />
+                <p className="text-xs font-bold text-red-700 dark:text-red-400">
+                  Home delivery is currently paused. Only store pickup is available.
+                </p>
+              </div>
             )}
             <div className="grid grid-cols-2 gap-3">
-              <label className={`flex items-center gap-3 p-4 border-2 rounded-xl transition ${storeStatus.deliveryPaused ? 'opacity-50 cursor-not-allowed border-gray-200 dark:border-gray-800 bg-gray-100 dark:bg-[#171717] grayscale' : formData.orderType === 'Delivery' ? 'border-green-500 bg-green-50 dark:bg-green-900/20 cursor-pointer' : 'border-gray-200 dark:border-gray-700 bg-white dark:bg-[#1a1a1a] cursor-pointer'}`}>
-                <input type="radio" name="orderType" value="Delivery" disabled={storeStatus.deliveryPaused} checked={formData.orderType === 'Delivery' && !storeStatus.deliveryPaused} onChange={(e) => setFormData({...formData, orderType: e.target.value})} className="w-4 h-4 text-green-600 focus:ring-green-500 disabled:opacity-50" />
-                <Truck className={formData.orderType === 'Delivery' && !storeStatus.deliveryPaused ? "text-green-600" : "text-gray-400"} size={20} />
+              <label className={`flex items-center gap-3 p-4 border-2 rounded-xl transition ${
+                storeStatus.deliveryPaused 
+                  ? "opacity-50 cursor-not-allowed border-gray-200 dark:border-gray-800 bg-gray-100 dark:bg-[#171717] grayscale" 
+                  : formData.orderType === "Delivery" 
+                  ? "border-green-500 bg-green-50 dark:bg-green-900/20 cursor-pointer" 
+                  : "border-gray-200 dark:border-gray-700 bg-white dark:bg-[#1a1a1a] cursor-pointer"
+              }`}>
+                <input
+                  type="radio"
+                  name="orderType"
+                  value="Delivery"
+                  disabled={storeStatus.deliveryPaused}
+                  checked={formData.orderType === "Delivery" && !storeStatus.deliveryPaused}
+                  onChange={(e) => setFormData({ ...formData, orderType: e.target.value })}
+                  className="w-4 h-4 text-green-600 focus:ring-green-500 disabled:opacity-50"
+                />
+                <Truck className={formData.orderType === "Delivery" && !storeStatus.deliveryPaused ? "text-green-600" : "text-gray-400"} size={20} />
                 <div>
                   <p className="text-sm font-bold text-gray-900 dark:text-white">Home Delivery</p>
-                  <p className="text-[10px] text-gray-500 mt-0.5">{storeStatus.deliveryPaused ? "Unavailable" : (cartTotal < deliveryConfig.freeAbove ? `₹${deliveryConfig.baseFee} charge (Free above ₹${deliveryConfig.freeAbove})` : "Free Delivery")}</p>
+                  <p className="text-[10px] text-gray-500 mt-0.5">
+                    {storeStatus.deliveryPaused 
+                      ? "Unavailable" 
+                      : (cartTotal < deliveryConfig.freeAbove ? `₹${deliveryConfig.baseFee} charge (Free above ₹${deliveryConfig.freeAbove})` : "Free Delivery")}
+                  </p>
                 </div>
               </label>
 
-              <label className={`flex items-center gap-3 p-4 border-2 rounded-xl cursor-pointer transition ${formData.orderType === 'Pickup' ? 'border-orange-500 bg-orange-50 dark:bg-orange-900/20' : 'border-gray-200 dark:border-gray-700 bg-white dark:bg-[#1a1a1a]'}`}>
-                <input type="radio" name="orderType" value="Pickup" checked={formData.orderType === 'Pickup'} onChange={(e) => setFormData({...formData, orderType: e.target.value})} className="w-4 h-4 text-orange-600 focus:ring-orange-500" />
-                <Store className={formData.orderType === 'Pickup' ? "text-orange-600" : "text-gray-400"} size={20} />
+              <label className={`flex items-center gap-3 p-4 border-2 rounded-xl cursor-pointer transition ${
+                formData.orderType === "Pickup" 
+                  ? "border-orange-500 bg-orange-50 dark:bg-orange-900/20" 
+                  : "border-gray-200 dark:border-gray-700 bg-white dark:bg-[#1a1a1a]"
+              }`}>
+                <input
+                  type="radio"
+                  name="orderType"
+                  value="Pickup"
+                  checked={formData.orderType === "Pickup"}
+                  onChange={(e) => setFormData({ ...formData, orderType: e.target.value })}
+                  className="w-4 h-4 text-orange-600 focus:ring-orange-500"
+                />
+                <Store className={formData.orderType === "Pickup" ? "text-orange-600" : "text-gray-400"} size={20} />
                 <div>
                   <p className="text-sm font-bold text-gray-900 dark:text-white">Store Pickup</p>
                   <p className="text-[10px] text-gray-500 mt-0.5">Free • Collect from store</p>
@@ -314,26 +495,76 @@ export default function CheckoutPage() {
             </div>
           </div>
 
-          <div><label className="block text-sm font-semibold mb-1 text-gray-800 dark:text-gray-300">Full Name</label><input required type="text" className="w-full border border-gray-300 dark:border-gray-700 rounded-lg p-3 bg-white dark:bg-[#1e1e1e] text-gray-900 dark:text-white focus:ring-2 focus:ring-green-500 outline-none transition" value={formData.name} onChange={(e) => setFormData({...formData, name: e.target.value})} /></div>
-          <div><label className="block text-sm font-semibold mb-1 text-gray-800 dark:text-gray-300">Phone Number</label><input required type="tel" className="w-full border border-gray-300 dark:border-gray-700 rounded-lg p-3 bg-white dark:bg-[#1e1e1e] text-gray-900 dark:text-white focus:ring-2 focus:ring-green-500 outline-none transition" value={formData.phone} onChange={(e) => setFormData({...formData, phone: e.target.value})} /></div>
+          <div>
+            <label className="block text-sm font-semibold mb-1 text-gray-800 dark:text-gray-300">Full Name</label>
+            <input
+              required
+              type="text"
+              className="w-full border border-gray-300 dark:border-gray-700 rounded-lg p-3 bg-white dark:bg-[#1e1e1e] text-gray-900 dark:text-white focus:ring-2 focus:ring-green-500 outline-none transition"
+              value={formData.name}
+              onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-semibold mb-1 text-gray-800 dark:text-gray-300">Phone Number</label>
+            <input
+              required
+              type="tel"
+              className="w-full border border-gray-300 dark:border-gray-700 rounded-lg p-3 bg-white dark:bg-[#1e1e1e] text-gray-900 dark:text-white focus:ring-2 focus:ring-green-500 outline-none transition"
+              value={formData.phone}
+              onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
+            />
+          </div>
           
           {formData.orderType === "Delivery" ? (
             <div className="relative animate-in fade-in duration-300">
               <div className="flex justify-between items-end mb-1">
                 <label className="block text-sm font-semibold text-gray-800 dark:text-gray-300">Delivery Address</label>
-                <button type="button" onClick={handleGetLocation} disabled={fetchingLocation} className="flex items-center gap-1 text-xs font-bold text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/20 hover:bg-blue-100 px-3 py-1.5 rounded-md border border-blue-200 dark:border-blue-800/50 transition"><Navigation2 size={14} className={fetchingLocation ? "animate-pulse" : ""} /> {fetchingLocation ? "Locating..." : "Use Live Location"}</button>
+                <button
+                  type="button"
+                  onClick={handleGetLocation}
+                  disabled={fetchingLocation}
+                  className="flex items-center gap-1 text-xs font-bold text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/20 hover:bg-blue-100 px-3 py-1.5 rounded-md border border-blue-200 dark:border-blue-800/50 transition"
+                >
+                  <Navigation2 size={14} className={fetchingLocation ? "animate-pulse" : ""} />
+                  {fetchingLocation ? "Locating..." : "Use Live Location"}
+                </button>
               </div>
-              <textarea required className="w-full border border-gray-300 dark:border-gray-700 rounded-lg p-3 bg-white dark:bg-[#1e1e1e] text-gray-900 dark:text-white focus:ring-2 focus:ring-green-500 outline-none transition" rows={2} value={formData.address} onChange={(e) => setFormData({...formData, address: e.target.value})} />
+              <textarea
+                required
+                className="w-full border border-gray-300 dark:border-gray-700 rounded-lg p-3 bg-white dark:bg-[#1e1e1e] text-gray-900 dark:text-white focus:ring-2 focus:ring-green-500 outline-none transition"
+                rows={2}
+                value={formData.address}
+                onChange={(e) => setFormData({ ...formData, address: e.target.value })}
+              />
               
               {locationCoords && (
                 <div className="mt-3 w-full h-48 rounded-xl overflow-hidden border-2 border-green-500/50 relative shadow-inner">
-                  <iframe width="100%" height="100%" frameBorder="0" scrolling="no" src={`https://maps.google.com/maps?q=${locationCoords.lat},${locationCoords.lng}&hl=en&z=15&output=embed`}></iframe>
-                  <div className="absolute bottom-2 right-2 bg-green-600 text-white text-[10px] px-2 py-1 rounded shadow-md flex items-center gap-1 font-bold"><CheckCircle2 size={12} /> Attached</div>
+                  <iframe
+                    width="100%"
+                    height="100%"
+                    frameBorder="0"
+                    scrolling="no"
+                    src={`https://maps.google.com/maps?q=${locationCoords.lat},${locationCoords.lng}&hl=en&z=15&output=embed`}
+                  ></iframe>
+                  <div className="absolute bottom-2 right-2 bg-green-600 text-white text-[10px] px-2 py-1 rounded shadow-md flex items-center gap-1 font-bold">
+                    <CheckCircle2 size={12} /> Attached
+                  </div>
                 </div>
               )}
+
               <div className="flex items-center gap-2 mt-2">
-                <input type="checkbox" id="saveAddress" checked={saveAddress} onChange={(e) => setSaveAddress(e.target.checked)} className="w-4 h-4 text-green-600 rounded focus:ring-green-500 transition"/>
-                <label htmlFor="saveAddress" className="text-sm font-medium text-gray-700 dark:text-gray-300 cursor-pointer">Save this location for future orders</label>
+                <input
+                  type="checkbox"
+                  id="saveAddress"
+                  checked={saveAddress}
+                  onChange={(e) => setSaveAddress(e.target.checked)}
+                  className="w-4 h-4 text-green-600 rounded focus:ring-green-500 transition"
+                />
+                <label htmlFor="saveAddress" className="text-sm font-medium text-gray-700 dark:text-gray-300 cursor-pointer">
+                  Save this location for future orders
+                </label>
               </div>
             </div>
           ) : (
@@ -345,24 +576,67 @@ export default function CheckoutPage() {
           <div className="mt-6 pt-4 border-t border-gray-200 dark:border-gray-800">
             <label className="block text-sm font-semibold mb-3 text-gray-800 dark:text-gray-300">Mode of Payment</label>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              <label className={`flex items-center gap-3 p-4 border-2 rounded-xl cursor-pointer transition ${formData.paymentMethod === 'Cash on Delivery' ? 'border-green-500 bg-green-50 dark:bg-green-900/20' : 'border-gray-200 dark:border-gray-700 bg-white dark:bg-[#1a1a1a]'}`}>
-                <input type="radio" name="paymentMethod" value="Cash on Delivery" checked={formData.paymentMethod === 'Cash on Delivery'} onChange={(e) => setFormData({...formData, paymentMethod: e.target.value})} className="w-4 h-4 text-green-600 focus:ring-green-500" />
-                <Banknote className={formData.paymentMethod === 'Cash on Delivery' ? "text-green-600" : "text-gray-400"} size={20} />
-                <div><p className="text-sm font-bold text-gray-900 dark:text-white">Cash / Pay at Shop</p><p className="text-[10px] text-gray-500 mt-0.5">Pay directly</p></div>
+              <label className={`flex items-center gap-3 p-4 border-2 rounded-xl cursor-pointer transition ${
+                formData.paymentMethod === "Cash on Delivery" 
+                  ? "border-green-500 bg-green-50 dark:bg-green-900/20" 
+                  : "border-gray-200 dark:border-gray-700 bg-white dark:bg-[#1a1a1a]"
+              }`}>
+                <input
+                  type="radio"
+                  name="paymentMethod"
+                  value="Cash on Delivery"
+                  checked={formData.paymentMethod === "Cash on Delivery"}
+                  onChange={(e) => setFormData({ ...formData, paymentMethod: e.target.value })}
+                  className="w-4 h-4 text-green-600 focus:ring-green-500"
+                />
+                <Banknote className={formData.paymentMethod === "Cash on Delivery" ? "text-green-600" : "text-gray-400"} size={20} />
+                <div>
+                  <p className="text-sm font-bold text-gray-900 dark:text-white">Cash / Pay at Shop</p>
+                  <p className="text-[10px] text-gray-500 mt-0.5">Pay directly</p>
+                </div>
               </label>
 
-              <label className={`flex items-center gap-3 p-4 border-2 rounded-xl cursor-pointer transition ${formData.paymentMethod === 'UPI on Delivery' ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20' : 'border-gray-200 dark:border-gray-700 bg-white dark:bg-[#1a1a1a]'}`}>
-                <input type="radio" name="paymentMethod" value="UPI on Delivery" checked={formData.paymentMethod === 'UPI on Delivery'} onChange={(e) => setFormData({...formData, paymentMethod: e.target.value})} className="w-4 h-4 text-blue-600 focus:ring-blue-500" />
-                <QrCode className={formData.paymentMethod === 'UPI on Delivery' ? "text-blue-600" : "text-gray-400"} size={20} />
-                <div><p className="text-sm font-bold text-gray-900 dark:text-white">UPI / Online</p><p className="text-[10px] text-gray-500 mt-0.5">Pay via GPay, Paytm</p></div>
+              <label className={`flex items-center gap-3 p-4 border-2 rounded-xl cursor-pointer transition ${
+                formData.paymentMethod === "UPI on Delivery" 
+                  ? "border-blue-500 bg-blue-50 dark:bg-blue-900/20" 
+                  : "border-gray-200 dark:border-gray-700 bg-white dark:bg-[#1a1a1a]"
+              }`}>
+                <input
+                  type="radio"
+                  name="paymentMethod"
+                  value="UPI on Delivery"
+                  checked={formData.paymentMethod === "UPI on Delivery"}
+                  onChange={(e) => setFormData({ ...formData, paymentMethod: e.target.value })}
+                  className="w-4 h-4 text-blue-600 focus:ring-blue-500"
+                />
+                <QrCode className={formData.paymentMethod === "UPI on Delivery" ? "text-blue-600" : "text-gray-400"} size={20} />
+                <div>
+                  <p className="text-sm font-bold text-gray-900 dark:text-white">UPI / Online</p>
+                  <p className="text-[10px] text-gray-500 mt-0.5">Pay via GPay, Paytm</p>
+                </div>
               </label>
             </div>
           </div>
 
-          <button type="submit" disabled={loading} className="w-full bg-green-700 dark:bg-green-600 text-white py-4 rounded-xl font-bold text-lg hover:bg-green-800 dark:hover:bg-green-500 transition shadow-lg mt-6 flex justify-center items-center">
+          <button
+            type="submit"
+            disabled={loading || !isStoreOpen}
+            className={`w-full py-4 rounded-xl font-bold text-lg transition shadow-lg mt-6 flex justify-center items-center ${
+              !isStoreOpen 
+                ? "bg-gray-400 dark:bg-gray-700 text-gray-200 cursor-not-allowed" 
+                : "bg-green-700 dark:bg-green-600 text-white hover:bg-green-800 dark:hover:bg-green-500"
+            }`}
+          >
             {loading ? (
-              <div className="flex items-center gap-2"><div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div> Verifying & Placing...</div>
-            ) : `Place Order • ₹${finalTotal.toFixed(2)}`}
+              <div className="flex items-center gap-2">
+                <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                Verifying & Placing...
+              </div>
+            ) : !isStoreOpen ? (
+              "Checkout Disabled (Store Closed)"
+            ) : (
+              `Place Order • ₹${finalTotal.toFixed(2)}`
+            )}
           </button>
         </form>
       </div>

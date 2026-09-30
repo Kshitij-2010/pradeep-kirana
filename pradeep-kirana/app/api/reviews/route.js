@@ -1,49 +1,153 @@
+// app/api/reviews/route.js
 import { NextResponse } from "next/server";
-import { adminDb } from "@/lib/firebaseAdmin"; // Aapki firebaseAdmin.js file ka path
+import { adminDb, adminAuth } from "@/lib/firebaseAdmin";
 
-export async function POST(req) { // req ke aage se type hata diya
+const rateLimit = new Map();
+
+export async function POST(req) {
   try {
-    const body = await req.json();
-    const { productId, ratingVal, reviewText, customerName, uid } = body;
+    const authHeader = req.headers.get('authorization');
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return NextResponse.json({ success: false, error: "Unauthorized" }, { status: 401 });
+    }
+    
+    const token = authHeader.split('Bearer ')[1];
+    let decodedToken;
+    try {
+      decodedToken = await adminAuth.verifyIdToken(token);
+    } catch (e) {
+      return NextResponse.json({ success: false, error: "Invalid Token" }, { status: 401 });
+    }
+    
+    const uid = decodedToken.uid;
+    const realCustomerName = decodedToken.name || "Customer";
 
-    // 1. Strict Validation: Hacker negative rating ya 1000 star rating nahi bhej sakta
-    if (!uid || !productId || typeof ratingVal !== 'number' || ratingVal < 1 || ratingVal > 5) {
-      return NextResponse.json({ success: false, error: "Invalid review data" }, { status: 400 });
+    const now = Date.now();
+    if (rateLimit.has(uid) && now - rateLimit.get(uid) < 5000) {
+      return NextResponse.json({ success: false, error: "Too many requests." }, { status: 429 });
+    }
+    rateLimit.set(uid, now);
+
+    const body = await req.json();
+    const { productId, ratingVal, reviewText } = body;
+
+    if (!productId || typeof productId !== 'string') {
+      return NextResponse.json({ success: false, error: "Invalid Product ID" }, { status: 400 });
+    }
+    
+    const rating = Number(ratingVal);
+    if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
+      return NextResponse.json({ success: false, error: "Rating must be an integer between 1 and 5" }, { status: 400 });
     }
 
-    // 2. Atomic Transaction: Review add karo aur Product ki rating secure server par update karo
-    await adminDb.runTransaction(async (transaction) => {
-      const productRef = adminDb.collection("items").doc(productId);
-      const productSnap = await transaction.get(productRef);
+    const sanitizedText = String(reviewText || "").trim().substring(0, 500);
 
-      if (!productSnap.exists) throw new Error("Product not found");
+    const productRef = adminDb.collection("items").doc(productId);
+    const productSnap = await productRef.get();
+    
+    if (!productSnap.exists) {
+      return NextResponse.json({ success: false, error: "Product not found" }, { status: 404 });
+    }
 
-      const data = productSnap.data();
+    // 1 User = 1 Review per product
+    const reviewDocId = `${productId}_${uid}`;
+    const reviewRef = adminDb.collection("reviews").doc(reviewDocId);
+    
+    const reviewDoc = await reviewRef.get();
+    let ratingDifference = rating;
+    let isNewReview = true;
 
-      // Naya Review Add karein
-      const newReviewRef = adminDb.collection("reviews").doc();
-      transaction.set(newReviewRef, {
-        productId,
-        productName: data.name,
-        customerName: customerName || "Customer",
-        customerId: uid,
-        rating: ratingVal,
-        // Text ko 1000 characters pe limit karo taaki database full na ho
-        reviewText: reviewText ? reviewText.substring(0, 1000) : "", 
-        createdAt: new Date()
+    if (reviewDoc.exists) {
+      isNewReview = false;
+      const oldRating = reviewDoc.data().rating;
+      ratingDifference = rating - oldRating; 
+    }
+
+    const batch = adminDb.batch();
+    
+    batch.set(reviewRef, {
+      productId: productId,
+      productName: productSnap.data().name,
+      customerId: uid,
+      customerName: realCustomerName, 
+      rating: rating,
+      reviewText: sanitizedText,
+      updatedAt: new Date(),
+      ...(isNewReview && { createdAt: new Date() })
+    }, { merge: true });
+
+    if (isNewReview) {
+      batch.update(productRef, {
+        ratingSum: (productSnap.data().ratingSum || 0) + rating,
+        ratingCount: (productSnap.data().ratingCount || 0) + 1
       });
-
-      // Product ke andar Total Rating badhayein
-      transaction.update(productRef, {
-        ratingSum: (data.ratingSum || 0) + ratingVal,
-        ratingCount: (data.ratingCount || 0) + 1
+    } else if (ratingDifference !== 0) {
+      batch.update(productRef, {
+        ratingSum: (productSnap.data().ratingSum || 0) + ratingDifference
       });
-    });
+    }
 
-    return NextResponse.json({ success: true, message: "Review submitted successfully!" }, { status: 200 });
+    await batch.commit();
+    return NextResponse.json({ success: true, message: "Review saved safely!" }, { status: 200 });
 
-  } catch (error) { // error ke aage se 'any' hata diya
-    console.error("Review Error:", error);
-    return NextResponse.json({ success: false, error: error.message || "Failed to submit review" }, { status: 500 });
+  } catch (error) {
+    console.error("Review Security Error:", error);
+    return NextResponse.json({ success: false, error: "Failed to submit review safely." }, { status: 500 });
+  }
+}
+
+// NAYA DELETE FUNCTION 
+export async function DELETE(req) {
+  try {
+    const authHeader = req.headers.get('authorization');
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return NextResponse.json({ success: false, error: "Unauthorized" }, { status: 401 });
+    }
+    
+    const token = authHeader.split('Bearer ')[1];
+    let decodedToken;
+    try {
+      decodedToken = await adminAuth.verifyIdToken(token);
+    } catch (e) {
+      return NextResponse.json({ success: false, error: "Invalid Token" }, { status: 401 });
+    }
+    const uid = decodedToken.uid;
+
+    const { searchParams } = new URL(req.url);
+    const productId = searchParams.get('productId');
+
+    if (!productId) return NextResponse.json({ success: false, error: "Missing Product ID" }, { status: 400 });
+
+    const reviewDocId = `${productId}_${uid}`;
+    const reviewRef = adminDb.collection("reviews").doc(reviewDocId);
+    const reviewDoc = await reviewRef.get();
+
+    if (!reviewDoc.exists) {
+      return NextResponse.json({ success: false, error: "Review not found" }, { status: 404 });
+    }
+
+    const rating = reviewDoc.data().rating;
+    const batch = adminDb.batch();
+    
+    // Review Delete Karo
+    batch.delete(reviewRef);
+
+    // Product Rating Decrement Karo
+    const productRef = adminDb.collection("items").doc(productId);
+    const productSnap = await productRef.get();
+    
+    if (productSnap.exists) {
+      const currentSum = productSnap.data().ratingSum || 0;
+      const currentCount = productSnap.data().ratingCount || 0;
+      batch.update(productRef, {
+        ratingSum: Math.max(0, currentSum - rating),
+        ratingCount: Math.max(0, currentCount - 1)
+      });
+    }
+
+    await batch.commit();
+    return NextResponse.json({ success: true, message: "Review deleted safely!" }, { status: 200 });
+  } catch (error) {
+    return NextResponse.json({ success: false, error: "Failed to delete review." }, { status: 500 });
   }
 }

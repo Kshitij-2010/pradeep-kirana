@@ -6,7 +6,7 @@ import { signInWithPopup, signOut, onAuthStateChanged } from "firebase/auth";
 import { db, auth, googleProvider } from "@/lib/firebase";
 import { useCart } from "@/context/CartContext"; 
 import { useWishlist } from "@/context/WishlistContext";
-import { Plus, Minus, MapPin, Store, ChevronRight, Search, X, UserCircle, Package, BellRing, Phone, MessageCircle, Clock, ExternalLink, Home, Star, AlertTriangle, CheckCircle2, Heart, ShoppingBag, Trash2 } from "lucide-react";
+import { Plus, Minus, MapPin, Store, ChevronRight, Search, X, UserCircle, Package, BellRing, Phone, MessageCircle, Clock, ExternalLink, Home, Star, AlertTriangle, CheckCircle2, Heart, ShoppingBag, Trash2, MessageSquare } from "lucide-react";
 import { useRouter } from "next/navigation";
 
 function StoreLogo({ className = "w-8 h-8" }: { className?: string }) {
@@ -111,6 +111,7 @@ export default function BlinkitStyleStorefront() {
   const [ratingVal, setRatingVal] = useState<number>(0);
   const [reviewText, setReviewText] = useState("");
   const [isSubmittingReview, setIsSubmittingReview] = useState(false);
+  const [hasReviewed, setHasReviewed] = useState(false); // New State to track if user already reviewed
 
   const [notification, setNotification] = useState<{ show: boolean, message: string }>({ show: false, message: "" });
   const prevStatusesRef = useRef<{ [key: string]: string }>({});
@@ -287,21 +288,60 @@ export default function BlinkitStyleStorefront() {
     }
   };
 
+  // CHECK EXISTING REVIEW WHEN MODAL OPENS
+  useEffect(() => {
+    if (selectedProduct && user) {
+      const checkExistingReview = async () => {
+        try {
+          const reviewRef = doc(db, "reviews", `${selectedProduct.id}_${user.uid}`);
+          const reviewSnap = await getDoc(reviewRef);
+          if (reviewSnap.exists()) {
+            setHasReviewed(true);
+            setRatingVal(reviewSnap.data().rating);
+            setReviewText(reviewSnap.data().reviewText || "");
+          } else {
+            setHasReviewed(false);
+            setRatingVal(0);
+            setReviewText("");
+          }
+        } catch (e) {
+          console.error("Error fetching review", e);
+        }
+      };
+      checkExistingReview();
+    } else {
+      setHasReviewed(false);
+      setRatingVal(0);
+      setReviewText("");
+    }
+  }, [selectedProduct, user]);
+
+  // ================= SECURE REVIEW SUBMISSION =================
   const submitReview = async () => {
-    if (!user) { showToast("Please login first to write a review! ⭐", "error"); handleLogin(); return; }
-    if (ratingVal === 0) { showToast("Please select a star rating first!", "error"); return; }
+    if (!user || !auth.currentUser) { 
+      showToast("Please login first to write a review! ⭐", "error"); 
+      handleLogin(); 
+      return; 
+    }
+    if (ratingVal === 0) { 
+      showToast("Please select a star rating first!", "error"); 
+      return; 
+    }
 
     setIsSubmittingReview(true);
     try {
+      const idToken = await auth.currentUser.getIdToken(true);
+
       const response = await fetch('/api/reviews', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${idToken}`
+        },
         body: JSON.stringify({
           productId: selectedProduct.id,
           ratingVal: ratingVal,
-          reviewText: reviewText,
-          customerName: user.displayName || "Customer",
-          uid: user.uid
+          reviewText: reviewText
         })
       });
 
@@ -309,8 +349,7 @@ export default function BlinkitStyleStorefront() {
 
       if (data.success) {
         showToast("Review submitted successfully! Thanks for your feedback 🎉", "success");
-        setRatingVal(0);
-        setReviewText("");
+        setHasReviewed(true);
       } else {
         showToast(`Failed: ${data.error}`, "error");
       }
@@ -631,10 +670,11 @@ export default function BlinkitStyleStorefront() {
       </div>
 
       {/* BOTTOM NAV */}
-      <nav className="fixed bottom-0 left-0 w-full bg-white dark:bg-[#121212] border-t border-gray-200 dark:border-gray-800 z-50 py-2.5 px-8 flex justify-around items-center shadow-[0_-4px_20px_rgba(0,0,0,0.05)] dark:shadow-[0_-4px_20px_rgba(0,0,0,0.4)]">
-        <button onClick={() => router.push('/')} className="flex flex-col items-center gap-1 text-green-600 dark:text-green-500 font-bold text-xs"><Home size={22} /><span>Home</span></button>
-        <button onClick={() => router.push('/wishlist')} className="flex flex-col items-center gap-1 text-gray-500 dark:text-gray-400 hover:text-green-600 dark:hover:text-green-500 font-semibold text-xs"><Heart size={22} /><span>Saved</span></button>
-        <button onClick={() => { if (!user) { showToast("Please login first!", "error"); handleLogin(); } else router.push('/orders'); }} className="flex flex-col items-center gap-1 text-gray-500 dark:text-gray-400 hover:text-green-600 dark:hover:text-green-500 font-semibold text-xs"><Package size={22} /><span>Orders</span></button>
+      <nav className="fixed bottom-0 left-0 w-full bg-white dark:bg-[#121212] border-t border-gray-200 dark:border-gray-800 z-50 py-2.5 px-4 flex justify-between items-center shadow-[0_-4px_20px_rgba(0,0,0,0.05)] dark:shadow-[0_-4px_20px_rgba(0,0,0,0.4)]">
+        <button onClick={() => router.push('/')} className="flex-1 flex flex-col items-center gap-1 text-green-600 dark:text-green-500 font-bold text-xs"><Home size={22} /><span>Home</span></button>
+        <button onClick={() => router.push('/wishlist')} className="flex-1 flex flex-col items-center gap-1 text-gray-500 dark:text-gray-400 hover:text-green-600 dark:hover:text-green-500 font-semibold text-xs"><Heart size={22} /><span>Saved</span></button>
+        <button onClick={() => { if (!user) { showToast("Please login first!", "error"); handleLogin(); } else router.push('/orders'); }} className="flex-1 flex flex-col items-center gap-1 text-gray-500 dark:text-gray-400 hover:text-green-600 dark:hover:text-green-500 font-semibold text-xs"><Package size={22} /><span>Orders</span></button>
+        <button onClick={() => { if (!user) { showToast("Please login first!", "error"); handleLogin(); } else router.push('/reviews'); }} className="flex-1 flex flex-col items-center gap-1 text-gray-500 dark:text-gray-400 hover:text-green-600 dark:hover:text-green-500 font-semibold text-xs"><MessageSquare size={22} /><span>Reviews</span></button>
       </nav>
 
       {/* ================= SMOOTH SLIDE-IN CART SIDEBAR ================= */}
@@ -781,24 +821,42 @@ export default function BlinkitStyleStorefront() {
               <p className="text-gray-500 dark:text-gray-400 text-sm mb-4 font-medium">{selectedProduct.unit}</p>
 
               <div className="mb-4 bg-gray-50 dark:bg-[#1a1a1a] p-4 rounded-2xl border border-gray-100 dark:border-gray-800">
-                <p className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2">Write a Review</p>
-                <div className="flex items-center gap-1 mb-3">
-                  {[1, 2, 3, 4, 5].map((star) => (
-                    <button key={star} onClick={() => setRatingVal(star)} onMouseEnter={() => setHoveredStar(star)} onMouseLeave={() => setHoveredStar(null)} className="p-1 hover:scale-110 transition-transform">
-                      <Star size={24} className={`transition-colors ${(hoveredStar ? star <= hoveredStar : star <= ratingVal) ? "fill-yellow-400 text-yellow-400" : "text-gray-300 dark:text-gray-600"}`} />
+                {hasReviewed ? (
+                  // ALREADY REVIEWED UI
+                  <div className="text-center py-2">
+                    <CheckCircle2 size={24} className="text-green-500 mx-auto mb-2" />
+                    <p className="text-sm font-bold text-gray-800 dark:text-gray-200 mb-1">You've reviewed this product!</p>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">Thanks for sharing your feedback.</p>
+                    <button 
+                      onClick={() => { setSelectedProduct(null); router.push('/reviews'); }} 
+                      className="text-sm font-bold text-green-600 dark:text-green-400 bg-green-50 dark:bg-green-900/20 px-4 py-2 rounded-xl hover:bg-green-100 transition"
+                    >
+                      Manage in My Reviews
                     </button>
-                  ))}
-                </div>
-                <textarea 
-                  value={reviewText} 
-                  onChange={(e) => setReviewText(e.target.value)} 
-                  placeholder="How was the product? Type your review here..." 
-                  className="w-full bg-white dark:bg-[#121212] text-gray-900 dark:text-white border border-gray-200 dark:border-gray-700 rounded-xl p-3 text-sm focus:ring-2 focus:ring-green-500 outline-none resize-none mb-3" 
-                  rows={2}
-                ></textarea>
-                <button onClick={submitReview} disabled={isSubmittingReview || ratingVal === 0} className="w-full bg-yellow-500 hover:bg-yellow-600 text-white font-bold py-2.5 rounded-xl transition disabled:opacity-50 text-sm shadow-sm">
-                  {isSubmittingReview ? "Submitting..." : "Submit Review"}
-                </button>
+                  </div>
+                ) : (
+                  // NEW REVIEW UI
+                  <>
+                    <p className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2">Write a Review</p>
+                    <div className="flex items-center gap-1 mb-3">
+                      {[1, 2, 3, 4, 5].map((star) => (
+                        <button key={star} onClick={() => setRatingVal(star)} onMouseEnter={() => setHoveredStar(star)} onMouseLeave={() => setHoveredStar(null)} className="p-1 hover:scale-110 transition-transform">
+                          <Star size={24} className={`transition-colors ${(hoveredStar ? star <= hoveredStar : star <= ratingVal) ? "fill-yellow-400 text-yellow-400" : "text-gray-300 dark:text-gray-600"}`} />
+                        </button>
+                      ))}
+                    </div>
+                    <textarea 
+                      value={reviewText} 
+                      onChange={(e) => setReviewText(e.target.value)} 
+                      placeholder="How was the product? Type your review here..." 
+                      className="w-full bg-white dark:bg-[#121212] text-gray-900 dark:text-white border border-gray-200 dark:border-gray-700 rounded-xl p-3 text-sm focus:ring-2 focus:ring-green-500 outline-none resize-none mb-3" 
+                      rows={2}
+                    ></textarea>
+                    <button onClick={submitReview} disabled={isSubmittingReview || ratingVal === 0} className="w-full bg-yellow-500 hover:bg-yellow-600 text-white font-bold py-2.5 rounded-xl transition disabled:opacity-50 text-sm shadow-sm">
+                      {isSubmittingReview ? "Submitting..." : "Submit Review"}
+                    </button>
+                  </>
+                )}
               </div>
 
               <div className="flex items-center justify-between mt-auto bg-gray-50 dark:bg-[#1a1a1a] p-4 rounded-2xl border border-gray-100 dark:border-gray-800">
