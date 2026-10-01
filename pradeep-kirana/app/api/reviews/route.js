@@ -1,153 +1,167 @@
-// app/api/reviews/route.js
 import { NextResponse } from "next/server";
 import { adminDb, adminAuth } from "@/lib/firebaseAdmin";
 
-const rateLimit = new Map();
+const jsonError = (error, status = 400) =>
+  NextResponse.json({ success: false, error }, { status });
+
+const getBearerToken = (req) => {
+  const header = req.headers.get("authorization") || "";
+  if (!header.startsWith("Bearer ")) return null;
+  return header.slice(7).trim();
+};
 
 export async function POST(req) {
+  let uid;
   try {
-    const authHeader = req.headers.get('authorization');
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return NextResponse.json({ success: false, error: "Unauthorized" }, { status: 401 });
-    }
+    const token = getBearerToken(req);
+    if (!token) return jsonError("Unauthorized", 401);
     
-    const token = authHeader.split('Bearer ')[1];
     let decodedToken;
     try {
       decodedToken = await adminAuth.verifyIdToken(token);
     } catch (e) {
-      return NextResponse.json({ success: false, error: "Invalid Token" }, { status: 401 });
+      return jsonError("Invalid Token", 401);
     }
     
-    const uid = decodedToken.uid;
+    uid = decodedToken.uid;
     const realCustomerName = decodedToken.name || "Customer";
-
-    const now = Date.now();
-    if (rateLimit.has(uid) && now - rateLimit.get(uid) < 5000) {
-      return NextResponse.json({ success: false, error: "Too many requests." }, { status: 429 });
-    }
-    rateLimit.set(uid, now);
 
     const body = await req.json();
     const { productId, ratingVal, reviewText } = body;
 
     if (!productId || typeof productId !== 'string') {
-      return NextResponse.json({ success: false, error: "Invalid Product ID" }, { status: 400 });
+      return jsonError("Invalid Product ID", 400);
     }
     
     const rating = Number(ratingVal);
     if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
-      return NextResponse.json({ success: false, error: "Rating must be an integer between 1 and 5" }, { status: 400 });
+      return jsonError("Rating must be an integer between 1 and 5", 400);
     }
 
     const sanitizedText = String(reviewText || "").trim().substring(0, 500);
 
-    const productRef = adminDb.collection("items").doc(productId);
-    const productSnap = await productRef.get();
-    
-    if (!productSnap.exists) {
-      return NextResponse.json({ success: false, error: "Product not found" }, { status: 404 });
-    }
-
-    // 1 User = 1 Review per product
+    // Ye trick guarantee karti hai ki ek user 1 hi review de paye
     const reviewDocId = `${productId}_${uid}`;
     const reviewRef = adminDb.collection("reviews").doc(reviewDocId);
-    
-    const reviewDoc = await reviewRef.get();
-    let ratingDifference = rating;
-    let isNewReview = true;
+    const productRef = adminDb.collection("items").doc(productId);
 
-    if (reviewDoc.exists) {
-      isNewReview = false;
-      const oldRating = reviewDoc.data().rating;
-      ratingDifference = rating - oldRating; 
-    }
+    // Transaction ensures ki product rating aur review ek sath update ho
+    await adminDb.runTransaction(async (transaction) => {
+      const productSnap = await transaction.get(productRef);
+      if (!productSnap.exists) {
+        const err = new Error("Product not found");
+        err.statusCode = 404;
+        throw err;
+      }
 
-    const batch = adminDb.batch();
-    
-    batch.set(reviewRef, {
-      productId: productId,
-      productName: productSnap.data().name,
-      customerId: uid,
-      customerName: realCustomerName, 
-      rating: rating,
-      reviewText: sanitizedText,
-      updatedAt: new Date(),
-      ...(isNewReview && { createdAt: new Date() })
-    }, { merge: true });
+      const reviewDoc = await transaction.get(reviewRef);
+      let ratingDifference = rating;
+      let isNewReview = true;
 
-    if (isNewReview) {
-      batch.update(productRef, {
-        ratingSum: (productSnap.data().ratingSum || 0) + rating,
-        ratingCount: (productSnap.data().ratingCount || 0) + 1
-      });
-    } else if (ratingDifference !== 0) {
-      batch.update(productRef, {
-        ratingSum: (productSnap.data().ratingSum || 0) + ratingDifference
-      });
-    }
+      // Agar review pehle se hai, toh sirf edit hoga aur difference calculate hoga
+      if (reviewDoc.exists) {
+        isNewReview = false;
+        const oldRating = reviewDoc.data().rating;
+        ratingDifference = rating - oldRating;
+      }
 
-    await batch.commit();
+      const productData = productSnap.data();
+      
+      // Save or Update the review (UPSERT)
+      transaction.set(reviewRef, {
+        productId: productId,
+        productName: productData.name,
+        customerId: uid,
+        customerName: realCustomerName,
+        rating: rating,
+        reviewText: sanitizedText,
+        updatedAt: new Date(),
+        ...(isNewReview && { createdAt: new Date() })
+      }, { merge: true });
+
+      // Update product's total stars based on whether it's new or an edit
+      if (isNewReview) {
+        transaction.update(productRef, {
+          ratingSum: (productData.ratingSum || 0) + rating,
+          ratingCount: (productData.ratingCount || 0) + 1
+        });
+      } else if (ratingDifference !== 0) {
+        transaction.update(productRef, {
+          ratingSum: (productData.ratingSum || 0) + ratingDifference
+        });
+      }
+    });
+
     return NextResponse.json({ success: true, message: "Review saved safely!" }, { status: 200 });
 
   } catch (error) {
-    console.error("Review Security Error:", error);
-    return NextResponse.json({ success: false, error: "Failed to submit review safely." }, { status: 500 });
+    const status = error?.statusCode || 500;
+    console.error("Review POST Error:", { uid, message: error?.message, stack: error?.stack });
+    
+    if (process.env.NODE_ENV === "development") {
+      return jsonError(error?.message || "Failed to submit review", status);
+    }
+    return jsonError("Failed to submit review.", status);
   }
 }
 
-// NAYA DELETE FUNCTION 
 export async function DELETE(req) {
+  let uid;
   try {
-    const authHeader = req.headers.get('authorization');
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return NextResponse.json({ success: false, error: "Unauthorized" }, { status: 401 });
-    }
+    const token = getBearerToken(req);
+    if (!token) return jsonError("Unauthorized", 401);
     
-    const token = authHeader.split('Bearer ')[1];
     let decodedToken;
     try {
       decodedToken = await adminAuth.verifyIdToken(token);
     } catch (e) {
-      return NextResponse.json({ success: false, error: "Invalid Token" }, { status: 401 });
+      return jsonError("Invalid Token", 401);
     }
-    const uid = decodedToken.uid;
+    
+    uid = decodedToken.uid;
 
     const { searchParams } = new URL(req.url);
     const productId = searchParams.get('productId');
 
-    if (!productId) return NextResponse.json({ success: false, error: "Missing Product ID" }, { status: 400 });
+    if (!productId) return jsonError("Missing Product ID", 400);
 
     const reviewDocId = `${productId}_${uid}`;
     const reviewRef = adminDb.collection("reviews").doc(reviewDocId);
-    const reviewDoc = await reviewRef.get();
-
-    if (!reviewDoc.exists) {
-      return NextResponse.json({ success: false, error: "Review not found" }, { status: 404 });
-    }
-
-    const rating = reviewDoc.data().rating;
-    const batch = adminDb.batch();
-    
-    // Review Delete Karo
-    batch.delete(reviewRef);
-
-    // Product Rating Decrement Karo
     const productRef = adminDb.collection("items").doc(productId);
-    const productSnap = await productRef.get();
-    
-    if (productSnap.exists) {
-      const currentSum = productSnap.data().ratingSum || 0;
-      const currentCount = productSnap.data().ratingCount || 0;
-      batch.update(productRef, {
-        ratingSum: Math.max(0, currentSum - rating),
-        ratingCount: Math.max(0, currentCount - 1)
-      });
-    }
 
-    await batch.commit();
+    await adminDb.runTransaction(async (transaction) => {
+      const reviewDoc = await transaction.get(reviewRef);
+      if (!reviewDoc.exists) {
+        const err = new Error("Review not found");
+        err.statusCode = 404;
+        throw err;
+      }
+
+      const productSnap = await transaction.get(productRef);
+      const rating = reviewDoc.data().rating;
+      
+      // Delete the review document
+      transaction.delete(reviewRef);
+
+      // Decrement the product's total rating properly
+      if (productSnap.exists) {
+        const currentSum = productSnap.data().ratingSum || 0;
+        const currentCount = productSnap.data().ratingCount || 0;
+        transaction.update(productRef, {
+          ratingSum: Math.max(0, currentSum - rating),
+          ratingCount: Math.max(0, currentCount - 1)
+        });
+      }
+    });
+
     return NextResponse.json({ success: true, message: "Review deleted safely!" }, { status: 200 });
   } catch (error) {
-    return NextResponse.json({ success: false, error: "Failed to delete review." }, { status: 500 });
+    const status = error?.statusCode || 500;
+    console.error("Review DELETE Error:", { uid, message: error?.message });
+    
+    if (process.env.NODE_ENV === "development") {
+      return jsonError(error?.message || "Failed to delete review", status);
+    }
+    return jsonError("Failed to delete review.", status);
   }
 }
