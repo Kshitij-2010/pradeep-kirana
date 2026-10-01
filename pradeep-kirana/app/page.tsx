@@ -2,11 +2,11 @@
 
 import { useEffect, useState, useRef } from "react";
 import { collection, onSnapshot, query, where, doc, getDoc, updateDoc, addDoc } from "firebase/firestore";
-import { signInWithPopup, signOut, onAuthStateChanged } from "firebase/auth";
-import { db, auth, googleProvider } from "@/lib/firebase";
+import { signOut, onAuthStateChanged } from "firebase/auth";
+import { db, auth } from "@/lib/firebase";
 import { useCart } from "@/context/CartContext"; 
 import { useWishlist } from "@/context/WishlistContext";
-import { Plus, Minus, MapPin, Store, ChevronRight, Search, X, UserCircle, Package, BellRing, Phone, MessageCircle, Clock, ExternalLink, Home, Star, AlertTriangle, CheckCircle2, Heart, ShoppingBag, Trash2, MessageSquare } from "lucide-react";
+import { Plus, Minus, MapPin, Store, ChevronRight, Search, X, UserCircle, Package, BellRing, Phone, MessageCircle, Clock, ExternalLink, Home, Star, AlertTriangle, CheckCircle2, Heart, ShoppingBag, Trash2, MessageSquare, Tag } from "lucide-react";
 import { useRouter } from "next/navigation";
 
 function StoreLogo({ className = "w-8 h-8" }: { className?: string }) {
@@ -111,7 +111,7 @@ export default function BlinkitStyleStorefront() {
   const [ratingVal, setRatingVal] = useState<number>(0);
   const [reviewText, setReviewText] = useState("");
   const [isSubmittingReview, setIsSubmittingReview] = useState(false);
-  const [hasReviewed, setHasReviewed] = useState(false); // New State to track if user already reviewed
+  const [hasReviewed, setHasReviewed] = useState(false);
 
   const [notification, setNotification] = useState<{ show: boolean, message: string }>({ show: false, message: "" });
   const prevStatusesRef = useRef<{ [key: string]: string }>({});
@@ -122,9 +122,7 @@ export default function BlinkitStyleStorefront() {
 
   const showToast = (message: string, type: 'success' | 'error' | 'info' = 'info') => {
     setToast({ show: true, message, type });
-    setTimeout(() => {
-      setToast(prev => ({ ...prev, show: false }));
-    }, 3500);
+    setTimeout(() => setToast(prev => ({ ...prev, show: false })), 3500);
   };
 
   const handleRemoveEntireItem = (item: any) => {
@@ -164,11 +162,8 @@ export default function BlinkitStyleStorefront() {
         const open = oh * 60 + om;
         const close = ch * 60 + cm;
         
-        if (close < open) {
-          setIsStoreOpen(current >= open || current <= close);
-        } else {
-          setIsStoreOpen(current >= open && current <= close);
-        }
+        if (close < open) setIsStoreOpen(current >= open || current <= close);
+        else setIsStoreOpen(current >= open && current <= close);
       } else {
         setIsStoreOpen(true);
       }
@@ -180,11 +175,35 @@ export default function BlinkitStyleStorefront() {
   }, [storeStatus]);
 
   useEffect(() => {
-    const unsubscribeAuth = onAuthStateChanged(auth, (currentUser) => {
-      setUser(currentUser);
+    let unsubOrders = () => {};
+
+    const unsubscribeAuth = onAuthStateChanged(auth, async (currentUser) => {
       if (currentUser) {
+        // =================================================================
+        // 🛡️ STRICT SECURITY GUARD: Force OTP Verification
+        // =================================================================
+        const hasPhoneLinked = currentUser.providerData.some((p) => p.providerId === "phone") || !!currentUser.phoneNumber;
+        
+        if (!hasPhoneLinked) {
+          // Check if user is an Admin (Admins don't need phone OTP)
+          const userDoc = await getDoc(doc(db, "users", currentUser.uid));
+          const isAdmin = userDoc.exists() && userDoc.data().role === "admin";
+          
+          if (!isAdmin) {
+            // Customer bypassed OTP or has an old unverified session -> Force Logout!
+            await signOut(auth);
+            setUser(null);
+            setCustomerOrders([]);
+            if (unsubOrders) unsubOrders();
+            return; // Stop execution here
+          }
+        }
+        // =================================================================
+
+        setUser(currentUser);
+        
         const qOrders = query(collection(db, "orders"), where("customerId", "==", currentUser.uid));
-        const unsubOrders = onSnapshot(qOrders, (snapshot) => {
+        unsubOrders = onSnapshot(qOrders, (snapshot) => {
           const newStatuses: { [key: string]: string } = {};
           const ordersList: any[] = [];
           let notifyMsg = "";
@@ -220,20 +239,18 @@ export default function BlinkitStyleStorefront() {
           setCustomerOrders(ordersList);
 
           if (shouldSound && notifyMsg) {
-            if (isCancelled) {
-              playCancellationSound();
-            } else {
-              playNotificationSound();
-            }
+            if (isCancelled) playCancellationSound();
+            else playNotificationSound();
             setNotification({ show: true, message: notifyMsg });
             setTimeout(() => setNotification({ show: false, message: "" }), 6000);
           }
           prevStatusesRef.current = newStatuses;
           if (isFirstLoad.current) isFirstLoad.current = false;
         });
-        return () => unsubOrders();
       } else {
+        setUser(null);
         setCustomerOrders([]);
+        if (unsubOrders) unsubOrders();
       }
     });
 
@@ -260,18 +277,14 @@ export default function BlinkitStyleStorefront() {
       }
     });
 
-    return () => { unsubscribeAuth(); unsubscribeDb(); unsubStoreStatus(); unsubDeliveryConfig(); };
+    return () => { 
+      unsubscribeAuth(); 
+      unsubscribeDb(); 
+      unsubStoreStatus(); 
+      unsubDeliveryConfig(); 
+      if (unsubOrders) unsubOrders();
+    };
   }, []);
-
-  const handleLogin = async () => {
-    try { 
-      await signInWithPopup(auth, googleProvider); 
-      showToast("Successfully logged in!", "success");
-    } 
-    catch (error) { 
-      showToast("Failed to login. Please try again.", "error"); 
-    }
-  };
 
   const handleConfirmReceipt = async (orderId: string, orderType: string) => {
     const newStatus = orderType === "Pickup" ? "Picked Up" : "Delivered";
@@ -288,7 +301,7 @@ export default function BlinkitStyleStorefront() {
     }
   };
 
-  // CHECK EXISTING REVIEW WHEN MODAL OPENS
+  // CHECK EXISTING REVIEW
   useEffect(() => {
     if (selectedProduct && user) {
       const checkExistingReview = async () => {
@@ -316,11 +329,10 @@ export default function BlinkitStyleStorefront() {
     }
   }, [selectedProduct, user]);
 
-  // ================= SECURE REVIEW SUBMISSION =================
   const submitReview = async () => {
     if (!user || !auth.currentUser) { 
       showToast("Please login first to write a review! ⭐", "error"); 
-      handleLogin(); 
+      router.push('/login'); 
       return; 
     }
     if (ratingVal === 0) { 
@@ -388,7 +400,7 @@ export default function BlinkitStyleStorefront() {
   );
 
   return (
-    <div className="min-h-screen pb-32 font-sans relative">
+    <div className="min-h-screen pb-32 font-sans relative selection:bg-green-200 dark:selection:bg-green-900/50">
       
       {/* CUSTOM TOAST NOTIFICATION */}
       {(toast.show || cartNotice) && (
@@ -412,7 +424,7 @@ export default function BlinkitStyleStorefront() {
 
       {/* CUSTOM CONFIRMATION DIALOG */}
       {confirmDialog && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4 animate-in fade-in zoom-in-95 duration-200">
           <div className="bg-white dark:bg-[#121212] w-full max-w-sm rounded-3xl p-6 shadow-2xl border border-gray-200 dark:border-gray-800 text-center">
             <div className="w-16 h-16 bg-red-100 text-red-600 dark:bg-red-900/30 dark:text-red-400 rounded-full flex items-center justify-center mx-auto mb-4">
               <Trash2 size={28} />
@@ -435,10 +447,10 @@ export default function BlinkitStyleStorefront() {
       )}
 
       {/* Header */}
-      <header className="bg-white dark:bg-[#121212] p-3 sm:p-4 shadow-sm border-b dark:border-gray-800 sticky top-0 z-40">
+      <header className="bg-white/80 dark:bg-[#121212]/80 backdrop-blur-lg p-3 sm:p-4 shadow-sm border-b dark:border-gray-800 sticky top-0 z-40">
         <div className="max-w-4xl mx-auto">
           <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 mb-3">
-            <div className="flex items-center gap-2.5">
+            <div className="flex items-center gap-2.5 hover:opacity-80 transition cursor-pointer" onClick={() => { setActiveCategory("All"); setSearchQuery(""); }}>
               <StoreLogo className="w-9 h-9 sm:w-10 sm:h-10 shadow-sm shrink-0" />
               <div>
                 <h1 className="text-lg sm:text-xl md:text-2xl font-extrabold tracking-tight text-gray-900 dark:text-white leading-tight">Pradeep Kirana</h1>
@@ -450,23 +462,23 @@ export default function BlinkitStyleStorefront() {
               {user ? (
                 <div className="flex items-center gap-1.5 bg-gray-50 dark:bg-[#1a1a1a] p-1 pr-2 sm:pr-3 rounded-full border border-gray-200 dark:border-gray-800">
                   <img src={user.photoURL} alt="Profile" className="w-7 h-7 sm:w-8 sm:h-8 rounded-full border-2 border-green-500 object-cover" />
-                  <div className="text-left"><p className="text-[11px] sm:text-xs font-bold leading-tight text-gray-900 dark:text-white">{user.displayName?.split(" ")[0]}</p><button onClick={() => { signOut(auth); showToast("Logged out successfully.", "info"); }} className="text-[9px] sm:text-[10px] text-red-500 font-bold hover:underline">Logout</button></div>
+                  <div className="text-left"><p className="text-[11px] sm:text-xs font-bold leading-tight text-gray-900 dark:text-white">{user.displayName?.split(" ")[0]}</p><button onClick={() => { signOut(auth); showToast("Logged out successfully.", "info"); }} className="text-[9px] sm:text-[10px] text-red-500 font-bold hover:underline transition">Logout</button></div>
                 </div>
               ) : (
-                <button onClick={handleLogin} className="flex items-center gap-1.5 bg-gray-900 dark:bg-white text-white dark:text-gray-900 px-3 py-1.5 sm:px-4 sm:py-2 rounded-lg text-xs sm:text-sm font-bold shadow-md hover:scale-105 transition transform"><UserCircle size={16} /> Login</button>
+                <button onClick={() => router.push('/login')} className="flex items-center gap-1.5 bg-gray-900 dark:bg-white text-white dark:text-gray-900 px-3 py-1.5 sm:px-4 sm:py-2 rounded-lg text-xs sm:text-sm font-bold shadow-md hover:scale-105 transition transform active:scale-95"><UserCircle size={16} /> Login</button>
               )}
             </div>
           </div>
-          <div className="relative">
-            <Search className="absolute left-3 top-3 text-gray-400 dark:text-gray-500" size={18} />
-            <input type="text" placeholder='Search "Aashirvaad Atta"' value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="w-full bg-gray-100 dark:bg-[#1e1e1e] text-gray-900 dark:text-white border border-transparent dark:border-gray-700 rounded-xl py-2.5 pl-9 pr-4 text-xs sm:text-sm focus:outline-none focus:ring-2 focus:ring-green-500 transition-colors" />
+          <div className="relative group">
+            <Search className="absolute left-3 top-3 text-gray-400 group-focus-within:text-green-500 transition-colors" size={18} />
+            <input type="text" placeholder='Search "Aashirvaad Atta"' value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="w-full bg-gray-100 dark:bg-[#1e1e1e] text-gray-900 dark:text-white border border-transparent dark:border-gray-700 rounded-xl py-2.5 pl-9 pr-4 text-xs sm:text-sm focus:outline-none focus:ring-2 focus:ring-green-500 focus:bg-white transition-all shadow-sm" />
           </div>
         </div>
       </header>
 
       {/* STORE CLOSED BANNER */}
       {!isStoreOpen && (
-        <div className="bg-red-100 dark:bg-red-900/50 border-b border-red-200 dark:border-red-800/50 px-4 py-3 flex items-center justify-center gap-2 z-30 shadow-sm">
+        <div className="bg-red-100 dark:bg-red-900/50 border-b border-red-200 dark:border-red-800/50 px-4 py-3 flex items-center justify-center gap-2 z-30 shadow-sm animate-in slide-in-from-top-2">
           <Store size={18} className="text-red-600 dark:text-red-400 shrink-0" />
           <p className="text-xs sm:text-sm font-bold text-red-800 dark:text-red-300 text-center">
             Store is currently closed. We are not accepting orders right now.
@@ -481,7 +493,7 @@ export default function BlinkitStyleStorefront() {
 
       {/* DELIVERY PAUSED BANNER */}
       {isStoreOpen && storeStatus.deliveryPaused && (
-        <div className="bg-orange-100 dark:bg-orange-900/50 border-b border-orange-200 dark:border-orange-800/50 px-4 py-2.5 flex items-center justify-center gap-2 z-30 shadow-sm">
+        <div className="bg-orange-100 dark:bg-orange-900/50 border-b border-orange-200 dark:border-orange-800/50 px-4 py-2.5 flex items-center justify-center gap-2 z-30 shadow-sm animate-in slide-in-from-top-2">
           <AlertTriangle size={18} className="text-orange-600 dark:text-orange-400 shrink-0" />
           <p className="text-xs sm:text-sm font-bold text-orange-800 dark:text-orange-300 text-center">
             Home Delivery is temporarily paused. <span className="underline decoration-2">Only Store Pickup is available.</span>
@@ -492,7 +504,7 @@ export default function BlinkitStyleStorefront() {
       {/* ACTIVE ORDERS & CONFIRMATION BANNER */}
       {user && activeOrdersNeedingConfirmation.length > 0 && (
         <div className="max-w-4xl mx-auto px-4 mt-4">
-          <div className="bg-gradient-to-r from-green-600 to-emerald-700 text-white p-4 rounded-2xl shadow-lg border border-green-500">
+          <div className="bg-gradient-to-r from-green-600 to-emerald-700 text-white p-4 rounded-2xl shadow-lg border border-green-500 animate-in fade-in zoom-in-95 duration-500">
             <div className="flex items-center justify-between mb-3">
               <div className="flex items-center gap-2">
                 <Package className="animate-pulse" size={20} />
@@ -505,7 +517,7 @@ export default function BlinkitStyleStorefront() {
               {activeOrdersNeedingConfirmation.map((order) => {
                 const isPickup = order.deliveryType === "Pickup" || order.customerDetails?.orderType === "Pickup";
                 return (
-                  <div key={order.id} className="bg-white/10 backdrop-blur-md p-3 rounded-xl border border-white/20 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                  <div key={order.id} className="bg-white/10 backdrop-blur-md p-3 rounded-xl border border-white/20 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 transition hover:bg-white/20">
                     <div>
                       <p className="text-xs font-bold text-green-200">Order ID: #{order.orderId || order.id.slice(0, 6)}</p>
                       <p className="text-sm font-extrabold">Status: <span className="text-yellow-300">Delivered / Ready - Please Confirm</span></p>
@@ -513,7 +525,7 @@ export default function BlinkitStyleStorefront() {
                     </div>
                     <button 
                       onClick={() => handleConfirmReceipt(order.id, isPickup ? "Pickup" : "Delivery")}
-                      className="w-full sm:w-auto bg-white text-green-800 hover:bg-green-50 px-4 py-2 rounded-xl text-xs font-extrabold shadow transition flex items-center justify-center gap-1.5"
+                      className="w-full sm:w-auto bg-white text-green-800 hover:bg-green-50 px-4 py-2 rounded-xl text-xs font-extrabold shadow transition flex items-center justify-center gap-1.5 active:scale-95 transform"
                     >
                       <CheckCircle2 size={16} className="text-green-600" />
                       {isPickup ? "Confirm Picked Up ✅" : "Confirm Received ✅"}
@@ -528,25 +540,25 @@ export default function BlinkitStyleStorefront() {
 
       {/* TOP RATED SECTION */}
       {!searchQuery && topRatedProducts.length > 0 && (
-        <div className="max-w-4xl mx-auto px-4 mt-6">
+        <div className="max-w-4xl mx-auto px-4 mt-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
           <div className="flex items-center justify-between mb-3">
             <h2 className="text-base sm:text-lg font-extrabold text-gray-900 dark:text-white flex items-center gap-1.5">
               <span>⭐</span> Top Rated Essentials
             </h2>
           </div>
-          <div className="flex gap-3 overflow-x-auto pb-2 scrollbar-hide">
+          <div className="flex gap-3 overflow-x-auto pb-4 pt-2 -mt-2 scrollbar-hide px-1">
             {topRatedProducts.map(product => {
               const rCount = product.ratingCount || 1;
               const avg = (product.ratingSum / rCount).toFixed(1);
               return (
-                <div key={product.id} onClick={() => setSelectedProduct(product)} className="min-w-[140px] max-w-[140px] bg-white dark:bg-[#171717] rounded-xl p-2.5 border border-gray-100 dark:border-gray-800 shadow-sm cursor-pointer flex-shrink-0 hover:border-green-500/40 transition">
+                <div key={product.id} onClick={() => setSelectedProduct(product)} className="min-w-[140px] max-w-[140px] bg-white dark:bg-[#171717] rounded-xl p-2.5 border border-gray-100 dark:border-gray-800 shadow-sm cursor-pointer flex-shrink-0 hover:border-green-500/40 hover:-translate-y-1 hover:shadow-md transition-all duration-200 group">
                   <div className="h-24 bg-gray-50 dark:bg-[#1e1e1e] rounded-lg overflow-hidden mb-2 relative flex items-center justify-center">
-                    {product.imageUrl ? <img src={product.imageUrl} alt={product.name} className="w-full h-full object-cover" /> : <span className="text-green-600 font-bold text-2xl">{product.name.charAt(0)}</span>}
-                    <span className="absolute bottom-1 right-1 bg-yellow-400 text-black text-[10px] font-black px-1.5 py-0.5 rounded flex items-center gap-0.5">
+                    {product.imageUrl ? <img src={product.imageUrl} alt={product.name} className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-300" /> : <span className="text-green-600 font-bold text-2xl group-hover:scale-110 transition-transform duration-300">{product.name.charAt(0)}</span>}
+                    <span className="absolute bottom-1 right-1 bg-yellow-400 text-black text-[10px] font-black px-1.5 py-0.5 rounded flex items-center gap-0.5 shadow-sm">
                       {avg} <Star size={9} className="fill-current" />
                     </span>
                   </div>
-                  <h4 className="text-xs font-semibold text-gray-800 dark:text-gray-200 line-clamp-1">{product.name}</h4>
+                  <h4 className="text-xs font-semibold text-gray-800 dark:text-gray-200 line-clamp-1 group-hover:text-green-600 transition-colors">{product.name}</h4>
                   <p className="text-xs font-bold text-green-600 dark:text-green-500 mt-0.5">₹{product.price}</p>
                 </div>
               );
@@ -558,19 +570,19 @@ export default function BlinkitStyleStorefront() {
       <main className="max-w-4xl mx-auto flex flex-col md:flex-row gap-6 p-4 mt-2">
         <div className="md:w-1/4 w-full flex md:flex-col overflow-x-auto gap-2 pb-2 scrollbar-hide">
           {dynamicCategories.map((cat: any) => (
-            <button key={cat} onClick={() => setActiveCategory(cat)} className={`flex-shrink-0 text-left px-4 py-3 rounded-xl text-sm font-semibold transition border ${activeCategory === cat ? "bg-green-100 dark:bg-green-900/20 text-green-800 dark:text-green-400 border-green-600 dark:border-green-600/50" : "bg-white dark:bg-[#171717] text-gray-600 dark:text-gray-300 border-transparent hover:bg-gray-50 dark:hover:bg-[#222]"}`}>{cat}</button>
+            <button key={cat} onClick={() => setActiveCategory(cat)} className={`flex-shrink-0 text-left px-4 py-3 rounded-xl text-sm font-semibold transition-all duration-200 border shadow-sm active:scale-95 ${activeCategory === cat ? "bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-400 border-green-500" : "bg-white dark:bg-[#171717] text-gray-600 dark:text-gray-300 border-transparent hover:bg-gray-50 dark:hover:bg-[#222]"}`}>{cat}</button>
           ))}
         </div>
 
         <div className="md:w-3/4 w-full">
-          <div className="flex justify-between items-center mb-4 px-1">
+          <div className="flex justify-between items-center mb-4 px-1 animate-in fade-in duration-300">
             <h2 className="text-base sm:text-lg font-extrabold text-gray-900 dark:text-white">
               {activeCategory === "All" ? "All Groceries & Essentials" : activeCategory}
             </h2>
             <select 
               value={sortBy} 
               onChange={(e) => setSortBy(e.target.value)} 
-              className="bg-white dark:bg-[#1a1a1a] text-gray-700 dark:text-gray-300 text-xs font-bold border border-gray-200 dark:border-gray-700 rounded-xl px-3 py-2 outline-none shadow-sm cursor-pointer"
+              className="bg-white dark:bg-[#1a1a1a] text-gray-700 dark:text-gray-300 text-xs font-bold border border-gray-200 dark:border-gray-700 rounded-xl px-3 py-2 outline-none shadow-sm cursor-pointer hover:border-gray-300 transition-colors focus:ring-2 focus:ring-green-500"
             >
               <option value="default">Sort By: Featured</option>
               <option value="low-high">Price: Low to High</option>
@@ -580,9 +592,12 @@ export default function BlinkitStyleStorefront() {
           </div>
 
           {loading ? (
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 animate-pulse">{[1,2,3,4,5,6].map(n => <div key={n} className="h-56 bg-gray-200 dark:bg-[#1e1e1e] rounded-xl"></div>)}</div>
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 animate-pulse">{[1,2,3,4,5,6].map(n => <div key={n} className="h-56 bg-gray-200 dark:bg-[#1e1e1e] rounded-2xl"></div>)}</div>
           ) : filteredProducts.length === 0 ? (
-            <div className="text-center text-gray-500 mt-10">{searchQuery ? "No products found." : "Store has no items currently!"}</div>
+            <div className="text-center text-gray-500 mt-10 p-10 bg-white dark:bg-[#121212] rounded-3xl border border-dashed border-gray-300 dark:border-gray-800">
+              <Package size={48} className="mx-auto mb-4 opacity-30" />
+              <p className="font-bold">{searchQuery ? "No products found matching your search." : "Store has no items currently!"}</p>
+            </div>
           ) : (
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
               {filteredProducts.map((product) => {
@@ -593,42 +608,42 @@ export default function BlinkitStyleStorefront() {
                 const isSaved = isInWishlist(product.id);
 
                 return (
-                  <div key={product.id} className="bg-white dark:bg-[#171717] rounded-xl shadow-sm border border-gray-100 dark:border-gray-800 overflow-hidden flex flex-col relative transition-colors hover:border-green-500/30">
+                  <div key={product.id} className="group bg-white dark:bg-[#171717] rounded-2xl shadow-sm border border-gray-100 dark:border-gray-800 overflow-hidden flex flex-col relative transition-all duration-300 hover:shadow-lg hover:-translate-y-1 hover:border-green-500/30">
                     
                     <button 
                       onClick={(e) => { e.stopPropagation(); toggleWishlist(product); }} 
-                      className="absolute top-2.5 right-2.5 z-20 p-2 bg-white/80 dark:bg-black/50 backdrop-blur-md rounded-full shadow transition hover:scale-110"
+                      className="absolute top-2.5 right-2.5 z-20 p-2 bg-white/80 dark:bg-black/50 backdrop-blur-md rounded-full shadow-sm transition-transform active:scale-90 hover:scale-110"
                     >
                       <Heart size={16} className={isSaved ? "fill-red-500 text-red-500" : "text-gray-500 dark:text-gray-300"} />
                     </button>
 
-                    <div onClick={() => setSelectedProduct(product)} className="h-32 bg-gray-50 dark:bg-[#1e1e1e] flex items-center justify-center overflow-hidden border-b border-gray-100 dark:border-gray-800 relative cursor-pointer">
-                      {product.imageUrl ? <img src={product.imageUrl} alt={product.name} className="w-full h-full object-cover hover:scale-105 transition-transform duration-300" /> : <span className="text-green-800 dark:text-green-500 font-bold text-4xl uppercase">{product.name.charAt(0)}</span>}
-                      {isOutOfStock && <div className="absolute inset-0 bg-white/60 dark:bg-black/60 flex items-center justify-center z-10"><span className="bg-red-500 text-white px-3 py-1 rounded font-bold text-xs uppercase tracking-wider shadow-sm">Out of Stock</span></div>}
+                    <div onClick={() => setSelectedProduct(product)} className="h-36 bg-gray-50 dark:bg-[#1e1e1e] flex items-center justify-center overflow-hidden border-b border-gray-100 dark:border-gray-800 relative cursor-pointer">
+                      {product.imageUrl ? <img src={product.imageUrl} alt={product.name} className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500" /> : <span className="text-green-800 dark:text-green-500 font-bold text-4xl uppercase group-hover:scale-110 transition-transform duration-500">{product.name.charAt(0)}</span>}
+                      {isOutOfStock && <div className="absolute inset-0 bg-white/60 dark:bg-black/60 flex items-center justify-center z-10 backdrop-blur-sm"><span className="bg-red-500 text-white px-3 py-1 rounded-lg font-bold text-xs uppercase tracking-wider shadow-sm">Out of Stock</span></div>}
                     </div>
                     
-                    <div className="p-3 flex flex-col flex-grow">
-                      <div className="flex items-center gap-1 text-[10px] sm:text-xs text-gray-500 mb-1">
-                        <div className={`flex items-center px-1.5 py-0.5 rounded font-bold ${rCount > 0 ? 'bg-green-50 text-green-700 dark:bg-green-900/30 dark:text-green-400' : 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400'}`}>
+                    <div className="p-3.5 flex flex-col flex-grow">
+                      <div className="flex items-center gap-1 text-[10px] sm:text-xs text-gray-500 mb-1.5">
+                        <div className={`flex items-center px-1.5 py-0.5 rounded font-bold ${rCount > 0 ? 'bg-green-50 text-green-700 dark:bg-green-900/30 dark:text-green-400 border border-green-100 dark:border-green-800/50' : 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400 border border-gray-200 dark:border-gray-700'}`}>
                           {avgRating} {rCount > 0 && <Star size={10} className="fill-current ml-0.5" />}
                         </div>
                         <span className="font-medium">({rCount > 0 ? rCount : 'No'} reviews)</span>
                       </div>
 
-                      <h3 onClick={() => setSelectedProduct(product)} className="text-sm font-semibold text-gray-800 dark:text-gray-100 line-clamp-2 leading-tight mb-1 cursor-pointer hover:text-green-600 transition-colors">{product.name}</h3>
-                      <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">{product.unit}</p>
+                      <h3 onClick={() => setSelectedProduct(product)} className="text-sm font-bold text-gray-800 dark:text-gray-100 line-clamp-2 leading-tight mb-1 cursor-pointer group-hover:text-green-600 dark:group-hover:text-green-400 transition-colors">{product.name}</h3>
+                      <p className="text-xs text-gray-500 dark:text-gray-400 mb-4 font-medium">{product.unit}</p>
                       
                       <div className="mt-auto flex items-center justify-between">
-                        <span className="font-bold text-sm text-gray-900 dark:text-white">₹{product.price}</span>
+                        <span className="font-extrabold text-sm text-gray-900 dark:text-white">₹{product.price}</span>
                         {!isOutOfStock && (
                           inCart > 0 ? (
-                            <div className="flex items-center bg-green-600 dark:bg-green-700 text-white rounded-md shadow-sm z-20">
-                              <button onClick={() => removeFromCart(product.id)} className="p-1.5 hover:bg-green-700 rounded-l-md"><Minus size={14}/></button>
-                              <span className="px-2 font-bold text-sm">{inCart}</span>
-                              <button onClick={() => addToCart(product)} disabled={inCart >= product.stockQuantity} className="p-1.5 hover:bg-green-700 rounded-r-md disabled:opacity-50"><Plus size={14}/></button>
+                            <div className="flex items-center bg-green-600 dark:bg-green-700 text-white rounded-lg shadow-sm z-20 overflow-hidden animate-in zoom-in-95 duration-200">
+                              <button onClick={() => removeFromCart(product.id)} className="p-1.5 hover:bg-green-700 dark:hover:bg-green-600 active:bg-green-800 transition-colors"><Minus size={14}/></button>
+                              <span className="px-2 font-bold text-sm w-6 text-center">{inCart}</span>
+                              <button onClick={() => addToCart(product)} disabled={inCart >= product.stockQuantity} className="p-1.5 hover:bg-green-700 dark:hover:bg-green-600 active:bg-green-800 transition-colors disabled:opacity-50"><Plus size={14}/></button>
                             </div>
                           ) : (
-                            <button onClick={() => addToCart(product)} className="border border-green-600 text-green-700 bg-green-50 px-4 py-1.5 rounded-md text-sm font-bold hover:bg-green-600 hover:text-white dark:bg-transparent dark:text-green-400 dark:hover:bg-green-600 transition z-20">ADD</button>
+                            <button onClick={() => addToCart(product)} className="border-2 border-green-600 text-green-700 bg-green-50/50 px-4 py-1.5 rounded-lg text-sm font-extrabold hover:bg-green-600 hover:text-white dark:bg-transparent dark:text-green-400 dark:hover:bg-green-600 transition-all z-20 active:scale-95 shadow-sm">ADD</button>
                           )
                         )}
                       </div>
@@ -646,9 +661,9 @@ export default function BlinkitStyleStorefront() {
         <div className="w-full max-w-4xl flex justify-end md:justify-center">
           <button 
             onClick={() => setIsCartOpen(true)} 
-            className={`bg-green-600 text-white shadow-2xl overflow-hidden flex items-center transition-all duration-300 ease-out hover:bg-green-700 border border-green-500/50 pointer-events-auto ${
+            className={`bg-green-600 text-white shadow-[0_8px_30px_rgb(0,0,0,0.2)] overflow-hidden flex items-center transition-all duration-300 ease-out hover:bg-green-700 border border-green-500/50 pointer-events-auto active:scale-95 ${
               cartCount > 0 
-                ? "w-full rounded-2xl py-3 px-4 justify-between" 
+                ? "w-full rounded-2xl py-3 px-5 justify-between animate-in slide-in-from-bottom-4" 
                 : "w-14 h-14 rounded-full justify-center"
             }`}
           >
@@ -658,7 +673,7 @@ export default function BlinkitStyleStorefront() {
                   <span className="text-[11px] uppercase tracking-wider font-bold text-green-200 leading-tight">{cartCount} Item{cartCount > 1 ? 's' : ''}</span>
                   <span className="text-base font-extrabold leading-tight mt-0.5">₹{finalCartTotalWithDelivery.toFixed(2)}</span>
                 </div>
-                <div className="flex items-center gap-1 font-bold text-sm bg-black/10 px-3 py-1.5 rounded-xl">
+                <div className="flex items-center gap-1 font-bold text-sm bg-black/15 px-3 py-2 rounded-xl transition hover:bg-black/25">
                   View Cart <ChevronRight size={18} className="text-green-200" />
                 </div>
               </div>
@@ -670,17 +685,17 @@ export default function BlinkitStyleStorefront() {
       </div>
 
       {/* BOTTOM NAV */}
-      <nav className="fixed bottom-0 left-0 w-full bg-white dark:bg-[#121212] border-t border-gray-200 dark:border-gray-800 z-50 py-2.5 px-4 flex justify-between items-center shadow-[0_-4px_20px_rgba(0,0,0,0.05)] dark:shadow-[0_-4px_20px_rgba(0,0,0,0.4)]">
-        <button onClick={() => router.push('/')} className="flex-1 flex flex-col items-center gap-1 text-green-600 dark:text-green-500 font-bold text-xs"><Home size={22} /><span>Home</span></button>
-        <button onClick={() => router.push('/wishlist')} className="flex-1 flex flex-col items-center gap-1 text-gray-500 dark:text-gray-400 hover:text-green-600 dark:hover:text-green-500 font-semibold text-xs"><Heart size={22} /><span>Saved</span></button>
-        <button onClick={() => { if (!user) { showToast("Please login first!", "error"); handleLogin(); } else router.push('/orders'); }} className="flex-1 flex flex-col items-center gap-1 text-gray-500 dark:text-gray-400 hover:text-green-600 dark:hover:text-green-500 font-semibold text-xs"><Package size={22} /><span>Orders</span></button>
-        <button onClick={() => { if (!user) { showToast("Please login first!", "error"); handleLogin(); } else router.push('/reviews'); }} className="flex-1 flex flex-col items-center gap-1 text-gray-500 dark:text-gray-400 hover:text-green-600 dark:hover:text-green-500 font-semibold text-xs"><MessageSquare size={22} /><span>Reviews</span></button>
+      <nav className="fixed bottom-0 left-0 w-full bg-white/90 dark:bg-[#121212]/90 backdrop-blur-md border-t border-gray-200 dark:border-gray-800 z-50 py-2.5 px-4 flex justify-between items-center shadow-[0_-4px_20px_rgba(0,0,0,0.05)] dark:shadow-[0_-4px_20px_rgba(0,0,0,0.4)] pb-[env(safe-area-inset-bottom)]">
+        <button onClick={() => router.push('/')} className="flex-1 flex flex-col items-center gap-1 text-green-600 dark:text-green-500 font-extrabold text-[10px] sm:text-xs transition active:scale-95"><Home size={22} className="mb-0.5" /><span>Home</span></button>
+        <button onClick={() => router.push('/wishlist')} className="flex-1 flex flex-col items-center gap-1 text-gray-500 dark:text-gray-400 hover:text-green-600 dark:hover:text-green-500 font-bold text-[10px] sm:text-xs transition active:scale-95"><Heart size={22} className="mb-0.5" /><span>Saved</span></button>
+        <button onClick={() => { if (!user) { showToast("Please login first!", "error"); router.push('/login'); } else router.push('/orders'); }} className="flex-1 flex flex-col items-center gap-1 text-gray-500 dark:text-gray-400 hover:text-green-600 dark:hover:text-green-500 font-bold text-[10px] sm:text-xs transition active:scale-95"><Package size={22} className="mb-0.5" /><span>Orders</span></button>
+        <button onClick={() => { if (!user) { showToast("Please login first!", "error"); router.push('/login'); } else router.push('/reviews'); }} className="flex-1 flex flex-col items-center gap-1 text-gray-500 dark:text-gray-400 hover:text-green-600 dark:hover:text-green-500 font-bold text-[10px] sm:text-xs transition active:scale-95"><MessageSquare size={22} className="mb-0.5" /><span>Reviews</span></button>
       </nav>
 
       {/* ================= SMOOTH SLIDE-IN CART SIDEBAR ================= */}
       {/* Overlay Background */}
       <div 
-        className={`fixed inset-0 z-[60] bg-black/60 backdrop-blur-sm transition-opacity duration-300 ease-in-out ${
+        className={`fixed inset-0 z-[60] bg-black/60 backdrop-blur-sm transition-all duration-300 ease-in-out ${
           isCartOpen ? "opacity-100 pointer-events-auto" : "opacity-0 pointer-events-none"
         }`}
         onClick={() => setIsCartOpen(false)}
@@ -692,16 +707,16 @@ export default function BlinkitStyleStorefront() {
           isCartOpen ? "translate-x-0" : "translate-x-full"
         }`}
       >
-        <div className="p-4 border-b border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-[#1e1e1e] flex justify-between items-center">
+        <div className="p-4 border-b border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-[#1e1e1e] flex justify-between items-center z-10 shadow-sm">
           <div className="flex items-center gap-3">
-            <h2 className="text-xl font-bold text-gray-900 dark:text-white flex items-center gap-2">Your Cart</h2>
+            <h2 className="text-xl font-extrabold text-gray-900 dark:text-white flex items-center gap-2">Your Cart</h2>
             {cartCount > 0 && (
-              <button onClick={handleClearCartClick} className="text-[10px] sm:text-xs text-red-500 font-bold hover:bg-red-50 dark:hover:bg-red-900/20 px-2.5 py-1.5 rounded-lg border border-red-100 dark:border-red-900/50 transition flex items-center gap-1">
+              <button onClick={handleClearCartClick} className="text-[10px] sm:text-xs text-red-500 font-bold hover:bg-red-50 dark:hover:bg-red-900/20 px-2.5 py-1.5 rounded-lg border border-red-100 dark:border-red-900/50 transition flex items-center gap-1 active:scale-95">
                 <Trash2 size={12} /> Clear Cart
               </button>
             )}
           </div>
-          <button onClick={() => setIsCartOpen(false)} className="p-2 text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-[#2a2a2a] rounded-full transition"><X size={24} /></button>
+          <button onClick={() => setIsCartOpen(false)} className="p-2 text-gray-500 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-[#2a2a2a] hover:text-gray-900 dark:hover:text-white rounded-full transition active:scale-90"><X size={22} /></button>
         </div>
         
         {!isStoreOpen && (
@@ -718,59 +733,66 @@ export default function BlinkitStyleStorefront() {
           </div>
         )}
 
-        <div className="flex-1 overflow-y-auto p-4">
+        <div className="flex-1 overflow-y-auto p-4 bg-gray-50/50 dark:bg-[#0a0a0a]">
           {cart.length === 0 ? (
             <div className="h-full flex flex-col items-center justify-center text-gray-400">
-              <ShoppingBag size={48} className="mb-4 opacity-50" />
-              <p className="font-medium text-sm">Your cart is empty.</p>
+              <div className="bg-gray-100 dark:bg-[#1a1a1a] p-6 rounded-full mb-4">
+                <ShoppingBag size={48} className="opacity-40" />
+              </div>
+              <p className="font-bold text-base text-gray-500 dark:text-gray-400">Your cart is empty</p>
+              <p className="text-xs mt-2 opacity-70">Add items from the store to see them here.</p>
             </div>
           ) : (
-            cart.map((item: any) => (
-              <div key={item.id} className="flex justify-between items-center bg-gray-50 dark:bg-[#1a1a1a] p-3 mb-2 rounded-lg border border-gray-200 dark:border-gray-800">
-                <div className="flex items-center gap-3">
-                  {item.imageUrl ? <img src={item.imageUrl} alt={item.name} className="w-10 h-10 rounded object-cover border border-gray-200 dark:border-gray-700" /> : <div className="w-10 h-10 rounded bg-gray-200 dark:bg-gray-800 text-gray-500 dark:text-gray-400 flex items-center justify-center font-bold">{item.name.charAt(0)}</div>}
-                  <div><h4 className="font-semibold text-gray-900 dark:text-white text-sm line-clamp-1">{item.name}</h4><p className="text-sm text-gray-500 dark:text-gray-400">₹{item.price}</p></div>
-                </div>
-                <div className="flex items-center gap-2">
-                  <div className="flex items-center bg-white dark:bg-[#121212] rounded-lg border border-gray-200 dark:border-gray-700 shadow-sm">
-                    <button onClick={() => removeFromCart(item.id)} className="p-1.5 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-[#2a2a2a] transition"><Minus size={16}/></button>
-                    <span className="px-2.5 font-semibold text-gray-900 dark:text-white text-sm">{item.cartQuantity}</span>
-                    <button onClick={() => addToCart(item)} disabled={item.cartQuantity >= item.stockQuantity} className="p-1.5 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-[#2a2a2a] transition disabled:opacity-30 disabled:cursor-not-allowed"><Plus size={16}/></button>
+            <div className="space-y-3">
+              {cart.map((item: any) => (
+                <div key={item.id} className="flex justify-between items-center bg-white dark:bg-[#1a1a1a] p-3 rounded-xl border border-gray-100 dark:border-gray-800 shadow-sm animate-in fade-in slide-in-from-right-4 duration-300">
+                  <div className="flex items-center gap-3 w-1/2">
+                    {item.imageUrl ? <img src={item.imageUrl} alt={item.name} className="w-12 h-12 rounded-lg object-cover border border-gray-100 dark:border-gray-700 bg-gray-50 dark:bg-[#1e1e1e]" /> : <div className="w-12 h-12 rounded-lg bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400 flex items-center justify-center font-bold">{item.name.charAt(0)}</div>}
+                    <div>
+                      <h4 className="font-bold text-gray-900 dark:text-white text-sm line-clamp-1 leading-tight mb-0.5">{item.name}</h4>
+                      <p className="text-sm font-extrabold text-green-600 dark:text-green-500">₹{item.price}</p>
+                    </div>
                   </div>
-                  <button 
-                    onClick={() => handleRemoveEntireItem(item)} 
-                    className="p-2 bg-red-50 dark:bg-red-900/20 text-red-500 hover:bg-red-100 dark:hover:bg-red-900/40 rounded-lg border border-transparent hover:border-red-200 dark:hover:border-red-800/50 transition"
-                    title="Remove Item"
-                  >
-                    <Trash2 size={16} />
-                  </button>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <div className="flex items-center bg-gray-50 dark:bg-[#121212] rounded-lg border border-gray-200 dark:border-gray-700 shadow-sm">
+                      <button onClick={() => removeFromCart(item.id)} className="p-2 text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-[#2a2a2a] transition active:bg-gray-300"><Minus size={14}/></button>
+                      <span className="px-2.5 font-bold text-gray-900 dark:text-white text-sm min-w-[28px] text-center">{item.cartQuantity}</span>
+                      <button onClick={() => addToCart(item)} disabled={item.cartQuantity >= item.stockQuantity} className="p-2 text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-[#2a2a2a] transition disabled:opacity-30 disabled:cursor-not-allowed active:bg-gray-300"><Plus size={14}/></button>
+                    </div>
+                    <button 
+                      onClick={() => handleRemoveEntireItem(item)} 
+                      className="p-2.5 bg-red-50 dark:bg-red-900/20 text-red-500 hover:bg-red-100 dark:hover:bg-red-900/40 hover:text-red-600 rounded-lg transition active:scale-90"
+                      title="Remove Item"
+                    >
+                      <Trash2 size={16} />
+                    </button>
+                  </div>
                 </div>
-              </div>
-            ))
+              ))}
+            </div>
           )}
         </div>
 
-        <div className="p-6 border-t border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-[#1e1e1e]">
-          <div className="space-y-2 mb-4 text-sm">
-            <div className="flex justify-between items-center text-gray-600 dark:text-gray-400">
+        <div className="p-5 border-t border-gray-200 dark:border-gray-800 bg-white dark:bg-[#1e1e1e] shadow-[0_-10px_20px_rgba(0,0,0,0.03)] z-10">
+          <div className="space-y-2 mb-4 text-sm bg-gray-50 dark:bg-[#1a1a1a] p-4 rounded-xl border border-gray-100 dark:border-gray-800">
+            <div className="flex justify-between items-center text-gray-600 dark:text-gray-400 font-medium">
               <span>Item Total</span>
-              <span className="font-semibold text-gray-900 dark:text-white">₹{cartTotal.toFixed(2)}</span>
+              <span className="font-bold text-gray-900 dark:text-white">₹{cartTotal.toFixed(2)}</span>
             </div>
-            <div className="flex justify-between items-center text-gray-600 dark:text-gray-400">
+            <div className="flex justify-between items-center text-gray-600 dark:text-gray-400 font-medium">
               <span>Delivery Charges</span>
-              <span className="font-semibold">
-                {cartTotal === 0 ? "₹0.00" : (cartTotal < deliveryConfig.freeAbove ? `₹${deliveryConfig.baseFee}.00` : <span className="text-green-600 dark:text-green-500 font-bold uppercase text-xs">FREE</span>)}
+              <span className="font-bold">
+                {cartTotal === 0 ? "₹0.00" : (cartTotal < deliveryConfig.freeAbove ? `₹${deliveryConfig.baseFee}.00` : <span className="text-green-600 dark:text-green-500 font-extrabold uppercase text-[10px] tracking-wider bg-green-100 dark:bg-green-900/30 px-2 py-0.5 rounded border border-green-200 dark:border-green-800/50">FREE</span>)}
               </span>
             </div>
+            <div className="flex justify-between items-center mt-2 pt-2 border-t border-gray-200 dark:border-gray-700 text-base font-extrabold text-gray-900 dark:text-white">
+              <span>Total Amount</span>
+              <span className="text-green-600 dark:text-green-500 text-lg">₹{cartTotal === 0 ? "0.00" : finalCartTotalWithDelivery.toFixed(2)}</span>
+            </div>
           </div>
 
-          <div className="flex justify-between items-center mb-3 pt-3 border-t border-gray-200 dark:border-gray-700 text-lg font-bold text-gray-900 dark:text-white">
-            <span>Total Amount</span>
-            <span className="text-green-600 dark:text-green-500">₹{cartTotal === 0 ? "0.00" : finalCartTotalWithDelivery.toFixed(2)}</span>
-          </div>
-
-          <div className="mb-4 text-xs font-semibold text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-950/40 p-2.5 rounded-xl border border-blue-100 dark:border-blue-900/50 flex items-center gap-1.5">
-            <span>🏷️</span>
+          <div className="mb-4 text-[11px] font-bold text-blue-700 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/20 p-3 rounded-xl border border-blue-100 dark:border-blue-800/50 flex items-center gap-2">
+            <Tag size={16} className="shrink-0" />
             <span>Apply coupons and promo codes on the checkout page</span>
           </div>
 
@@ -778,17 +800,17 @@ export default function BlinkitStyleStorefront() {
             onClick={() => { 
               if (!isStoreOpen || cartCount === 0) return;
               setIsCartOpen(false); 
-              if(!user) { showToast("Login to Checkout!", "error"); handleLogin(); } 
+              if(!user) { showToast("Please login to checkout!", "error"); router.push('/login'); } 
               else router.push('/checkout'); 
             }} 
             disabled={!isStoreOpen || cartCount === 0}
-            className={`w-full py-4 rounded-xl font-bold text-lg transition shadow-md ${
+            className={`w-full py-4 rounded-xl font-bold text-lg transition-all active:scale-[0.98] shadow-md flex justify-center items-center gap-2 ${
               isStoreOpen && cartCount > 0
-                ? "bg-green-700 dark:bg-green-600 text-white hover:bg-green-800 dark:hover:bg-green-500" 
-                : "bg-gray-400 dark:bg-gray-700 text-gray-200 cursor-not-allowed"
+                ? "bg-green-600 dark:bg-green-600 text-white hover:bg-green-700 dark:hover:bg-green-500" 
+                : "bg-gray-300 dark:bg-gray-800 text-gray-500 dark:text-gray-500 cursor-not-allowed shadow-none"
             }`}
           >
-            {!isStoreOpen ? "Checkout Disabled (Store Closed)" : (cartCount === 0 ? "Cart is Empty" : "Proceed to Checkout")}
+            {!isStoreOpen ? "Checkout Disabled (Store Closed)" : (cartCount === 0 ? "Cart is Empty" : <>Proceed to Checkout <ChevronRight size={20} /></>)}
           </button>
         </div>
       </div>
@@ -796,52 +818,55 @@ export default function BlinkitStyleStorefront() {
 
       {/* PRODUCT DETAILS MODAL */}
       {selectedProduct && (
-        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
-          <div className="bg-white dark:bg-[#121212] w-full max-w-md rounded-3xl shadow-2xl overflow-hidden border border-gray-200 dark:border-gray-800 animate-in fade-in zoom-in duration-200 relative flex flex-col max-h-[90vh]">
-            <button onClick={() => { setSelectedProduct(null); setRatingVal(0); setReviewText(""); }} className="absolute top-4 right-4 z-10 p-2 bg-white/80 dark:bg-black/50 backdrop-blur-md hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-800 dark:text-gray-200 rounded-full shadow-sm transition"><X size={20} /></button>
-            <div className="h-48 sm:h-56 bg-gray-50 dark:bg-[#1e1e1e] flex items-center justify-center overflow-hidden shrink-0 relative border-b border-gray-200 dark:border-gray-800">
-               {selectedProduct.imageUrl ? <img src={selectedProduct.imageUrl} alt={selectedProduct.name} className="w-full h-full object-cover" /> : <span className="text-green-800 dark:text-green-500 font-bold text-8xl uppercase">{selectedProduct.name.charAt(0)}</span>}
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+          <div className="bg-white dark:bg-[#121212] w-full max-w-md rounded-3xl shadow-2xl overflow-hidden border border-gray-200 dark:border-gray-800 animate-in zoom-in-95 duration-300 relative flex flex-col max-h-[90vh]">
+            <button onClick={() => { setSelectedProduct(null); setRatingVal(0); setReviewText(""); }} className="absolute top-4 right-4 z-10 p-2 bg-white/80 dark:bg-black/50 backdrop-blur-md hover:bg-white dark:hover:bg-gray-800 text-gray-800 dark:text-gray-200 rounded-full shadow-md transition-all hover:scale-110 active:scale-95"><X size={20} /></button>
+            <div className="h-56 sm:h-64 bg-gray-50 dark:bg-[#1a1a1a] flex items-center justify-center overflow-hidden shrink-0 relative border-b border-gray-200 dark:border-gray-800">
+               {selectedProduct.imageUrl ? <img src={selectedProduct.imageUrl} alt={selectedProduct.name} className="w-full h-full object-cover transition-transform duration-700 hover:scale-110" /> : <span className="text-green-800 dark:text-green-500 font-bold text-8xl uppercase">{selectedProduct.name.charAt(0)}</span>}
+               {selectedProduct.stockQuantity <= 0 && <div className="absolute inset-0 bg-white/60 dark:bg-black/60 flex items-center justify-center z-10 backdrop-blur-sm"><span className="bg-red-500 text-white px-4 py-1.5 rounded-lg font-bold text-sm uppercase tracking-widest shadow-lg transform -rotate-12">Out of Stock</span></div>}
             </div>
 
-            <div className="p-6 overflow-y-auto flex flex-col flex-grow">
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-xs font-bold text-green-600 dark:text-green-500 uppercase tracking-wider">{selectedProduct.category}</span>
+            <div className="p-6 overflow-y-auto flex flex-col flex-grow bg-white dark:bg-[#121212]">
+              <div className="flex items-center justify-between mb-3">
+                <span className="text-[10px] font-extrabold text-green-700 dark:text-green-400 bg-green-50 dark:bg-green-900/30 border border-green-200 dark:border-green-800/50 px-2 py-1 rounded uppercase tracking-wider">{selectedProduct.category}</span>
                 <div className="flex items-center gap-1.5 text-xs text-gray-500 dark:text-gray-400">
                   {(() => {
                     const rCount = selectedProduct.ratingCount || 0;
                     const avg = rCount > 0 ? (selectedProduct.ratingSum / rCount).toFixed(1) : "New";
                     return (
-                      <><div className={`flex items-center px-2 py-0.5 rounded font-bold ${rCount > 0 ? 'bg-green-50 text-green-700 dark:bg-green-900/30 dark:text-green-400' : 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400'}`}>{avg} {rCount > 0 && <Star size={12} className="fill-current ml-1" />}</div><span className="font-medium">({rCount > 0 ? rCount : '0'} reviews)</span></>
+                      <><div className={`flex items-center px-2 py-0.5 rounded font-bold ${rCount > 0 ? 'bg-yellow-50 text-yellow-700 dark:bg-yellow-900/20 dark:text-yellow-500 border border-yellow-200 dark:border-yellow-800/30' : 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400'}`}>{avg} {rCount > 0 && <Star size={11} className="fill-current ml-1" />}</div><span className="font-semibold">({rCount > 0 ? rCount : '0'} reviews)</span></>
                     );
                   })()}
                 </div>
               </div>
 
-              <h2 className="text-xl font-extrabold text-gray-900 dark:text-white mb-1">{selectedProduct.name}</h2>
-              <p className="text-gray-500 dark:text-gray-400 text-sm mb-4 font-medium">{selectedProduct.unit}</p>
+              <h2 className="text-2xl font-black text-gray-900 dark:text-white mb-1 leading-tight">{selectedProduct.name}</h2>
+              <p className="text-gray-500 dark:text-gray-400 text-sm mb-5 font-semibold">{selectedProduct.unit}</p>
 
-              <div className="mb-4 bg-gray-50 dark:bg-[#1a1a1a] p-4 rounded-2xl border border-gray-100 dark:border-gray-800">
+              <div className="mb-2 bg-gray-50 dark:bg-[#1a1a1a] p-5 rounded-3xl border border-gray-100 dark:border-gray-800">
                 {hasReviewed ? (
                   // ALREADY REVIEWED UI
-                  <div className="text-center py-2">
-                    <CheckCircle2 size={24} className="text-green-500 mx-auto mb-2" />
-                    <p className="text-sm font-bold text-gray-800 dark:text-gray-200 mb-1">You've reviewed this product!</p>
-                    <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">Thanks for sharing your feedback.</p>
+                  <div className="text-center py-2 animate-in fade-in duration-300">
+                    <div className="w-12 h-12 bg-green-100 dark:bg-green-900/30 text-green-600 dark:text-green-400 rounded-full flex items-center justify-center mx-auto mb-3">
+                      <CheckCircle2 size={24} />
+                    </div>
+                    <p className="text-sm font-extrabold text-gray-900 dark:text-white mb-1">You've reviewed this product!</p>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mb-4 font-medium">Thanks for sharing your feedback.</p>
                     <button 
                       onClick={() => { setSelectedProduct(null); router.push('/reviews'); }} 
-                      className="text-sm font-bold text-green-600 dark:text-green-400 bg-green-50 dark:bg-green-900/20 px-4 py-2 rounded-xl hover:bg-green-100 transition"
+                      className="w-full text-sm font-bold text-green-700 dark:text-green-400 bg-white dark:bg-[#222] border border-green-200 dark:border-green-800/50 px-4 py-2.5 rounded-xl hover:bg-green-50 dark:hover:bg-green-900/20 transition shadow-sm active:scale-95"
                     >
                       Manage in My Reviews
                     </button>
                   </div>
                 ) : (
                   // NEW REVIEW UI
-                  <>
-                    <p className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2">Write a Review</p>
-                    <div className="flex items-center gap-1 mb-3">
+                  <div className="animate-in fade-in duration-300">
+                    <p className="text-xs font-extrabold text-gray-500 dark:text-gray-400 uppercase tracking-widest mb-3 text-center">Write a Review</p>
+                    <div className="flex items-center justify-center gap-1.5 mb-4">
                       {[1, 2, 3, 4, 5].map((star) => (
-                        <button key={star} onClick={() => setRatingVal(star)} onMouseEnter={() => setHoveredStar(star)} onMouseLeave={() => setHoveredStar(null)} className="p-1 hover:scale-110 transition-transform">
-                          <Star size={24} className={`transition-colors ${(hoveredStar ? star <= hoveredStar : star <= ratingVal) ? "fill-yellow-400 text-yellow-400" : "text-gray-300 dark:text-gray-600"}`} />
+                        <button key={star} onClick={() => setRatingVal(star)} onMouseEnter={() => setHoveredStar(star)} onMouseLeave={() => setHoveredStar(null)} className="p-1 hover:scale-125 transition-transform active:scale-95">
+                          <Star size={28} className={`transition-all duration-200 ${(hoveredStar ? star <= hoveredStar : star <= ratingVal) ? "fill-yellow-400 text-yellow-400 drop-shadow-sm" : "text-gray-300 dark:text-gray-600"}`} />
                         </button>
                       ))}
                     </div>
@@ -849,27 +874,31 @@ export default function BlinkitStyleStorefront() {
                       value={reviewText} 
                       onChange={(e) => setReviewText(e.target.value)} 
                       placeholder="How was the product? Type your review here..." 
-                      className="w-full bg-white dark:bg-[#121212] text-gray-900 dark:text-white border border-gray-200 dark:border-gray-700 rounded-xl p-3 text-sm focus:ring-2 focus:ring-green-500 outline-none resize-none mb-3" 
+                      className="w-full bg-white dark:bg-[#121212] text-gray-900 dark:text-white border border-gray-200 dark:border-gray-700 rounded-2xl p-3.5 text-sm focus:ring-2 focus:ring-green-500 outline-none resize-none mb-3 shadow-sm placeholder:text-gray-400" 
                       rows={2}
                     ></textarea>
-                    <button onClick={submitReview} disabled={isSubmittingReview || ratingVal === 0} className="w-full bg-yellow-500 hover:bg-yellow-600 text-white font-bold py-2.5 rounded-xl transition disabled:opacity-50 text-sm shadow-sm">
-                      {isSubmittingReview ? "Submitting..." : "Submit Review"}
+                    <button onClick={submitReview} disabled={isSubmittingReview || ratingVal === 0} className="w-full bg-gray-900 dark:bg-white text-white dark:text-gray-900 hover:bg-gray-800 dark:hover:bg-gray-200 font-extrabold py-3 rounded-xl transition disabled:opacity-50 text-sm shadow-md active:scale-95 flex justify-center items-center gap-2">
+                      {isSubmittingReview ? <div className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin"></div> : "Submit Review"}
                     </button>
-                  </>
+                  </div>
                 )}
               </div>
+            </div>
 
-              <div className="flex items-center justify-between mt-auto bg-gray-50 dark:bg-[#1a1a1a] p-4 rounded-2xl border border-gray-100 dark:border-gray-800">
-                 <span className="text-2xl font-extrabold text-gray-900 dark:text-white">₹{selectedProduct.price}</span>
-                 {(() => {
-                   const inCart = cart.find((item: any) => item.id === selectedProduct.id)?.cartQuantity || 0;
-                   if (selectedProduct.stockQuantity <= 0) return <span className="bg-red-100 text-red-600 dark:bg-red-900/30 dark:text-red-400 px-4 py-2 rounded-xl font-bold border border-red-200 dark:border-red-800/50">Out of Stock</span>;
-                   if (inCart > 0) return (
-                    <div className="flex items-center bg-green-600 dark:bg-green-700 text-white rounded-xl shadow-md border border-green-700 dark:border-green-600"><button onClick={() => removeFromCart(selectedProduct.id)} className="p-3 hover:bg-green-700 dark:hover:bg-green-600 rounded-l-xl transition"><Minus size={18}/></button><span className="px-4 font-bold text-lg">{inCart}</span><button onClick={() => addToCart(selectedProduct)} disabled={inCart >= selectedProduct.stockQuantity} className="p-3 hover:bg-green-700 dark:hover:bg-green-600 rounded-r-xl disabled:opacity-50 transition"><Plus size={18}/></button></div>
-                   );
-                   return <button onClick={() => addToCart(selectedProduct)} className="bg-green-600 hover:bg-green-700 text-white px-8 py-3 rounded-xl font-bold flex items-center gap-2 transform hover:scale-105 transition shadow-md">ADD</button>;
-                 })()}
-              </div>
+            <div className="p-5 border-t border-gray-200 dark:border-gray-800 bg-white dark:bg-[#1e1e1e] flex items-center justify-between z-10 shadow-[0_-4px_10px_rgba(0,0,0,0.02)]">
+               <span className="text-3xl font-black text-gray-900 dark:text-white">₹{selectedProduct.price}</span>
+               {(() => {
+                 const inCart = cart.find((item: any) => item.id === selectedProduct.id)?.cartQuantity || 0;
+                 if (selectedProduct.stockQuantity <= 0) return <span className="bg-red-50 text-red-600 dark:bg-red-900/20 dark:text-red-400 px-5 py-2.5 rounded-xl font-extrabold border border-red-200 dark:border-red-800/50 text-sm uppercase tracking-wide">Out of Stock</span>;
+                 if (inCart > 0) return (
+                  <div className="flex items-center bg-green-600 dark:bg-green-700 text-white rounded-2xl shadow-lg animate-in zoom-in-95 duration-200">
+                    <button onClick={() => removeFromCart(selectedProduct.id)} className="p-3.5 hover:bg-green-700 dark:hover:bg-green-600 rounded-l-2xl transition active:bg-green-800"><Minus size={20}/></button>
+                    <span className="px-5 font-black text-lg w-8 text-center">{inCart}</span>
+                    <button onClick={() => addToCart(selectedProduct)} disabled={inCart >= selectedProduct.stockQuantity} className="p-3.5 hover:bg-green-700 dark:hover:bg-green-600 rounded-r-2xl disabled:opacity-50 transition active:bg-green-800"><Plus size={20}/></button>
+                  </div>
+                 );
+                 return <button onClick={() => addToCart(selectedProduct)} className="bg-green-600 hover:bg-green-700 text-white px-8 py-3.5 rounded-2xl font-extrabold flex items-center gap-2 transform active:scale-95 transition shadow-lg text-sm tracking-wide">ADD TO CART</button>;
+               })()}
             </div>
           </div>
         </div>
@@ -877,31 +906,31 @@ export default function BlinkitStyleStorefront() {
 
       {/* CONTACT MODAL */}
       {showContactModal && (
-        <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
-          <div className="bg-white dark:bg-[#121212] w-full max-w-md rounded-3xl shadow-2xl overflow-hidden border border-gray-200 dark:border-gray-800 animate-in fade-in zoom-in duration-200">
-            <div className="p-4 border-b border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-[#1e1e1e] flex justify-between items-center">
-              <h3 className="font-extrabold text-lg text-gray-900 dark:text-white flex items-center gap-2"><Store className="text-green-600" size={20} /> Pradeep Kirana Store</h3>
-              <button onClick={() => setShowContactModal(false)} className="p-1.5 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-full text-gray-500 dark:text-gray-400 transition"><X size={20} /></button>
+        <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+          <div className="bg-white dark:bg-[#121212] w-full max-w-md rounded-3xl shadow-2xl overflow-hidden border border-gray-200 dark:border-gray-800 animate-in zoom-in-95 duration-300">
+            <div className="p-4 border-b border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-[#1e1e1e] flex justify-between items-center shadow-sm">
+              <h3 className="font-extrabold text-lg text-gray-900 dark:text-white flex items-center gap-2"><Store className="text-green-600" size={20} /> Pradeep Kirana</h3>
+              <button onClick={() => setShowContactModal(false)} className="p-2 hover:bg-gray-200 dark:hover:bg-[#2a2a2a] rounded-full text-gray-500 dark:text-gray-400 transition active:scale-90"><X size={20} /></button>
             </div>
             <div className="p-6 space-y-4">
-              <div className="flex items-start gap-3 bg-gray-50 dark:bg-[#1a1a1a] p-3.5 rounded-2xl border border-gray-100 dark:border-gray-800">
-                <MapPin className="text-red-500 shrink-0 mt-1" size={20} />
+              <div className="flex items-start gap-3 bg-gray-50 dark:bg-[#1a1a1a] p-4 rounded-2xl border border-gray-100 dark:border-gray-800 transition hover:shadow-md">
+                <MapPin className="text-red-500 shrink-0 mt-1" size={22} />
                 <div className="flex-1">
-                  <p className="text-xs font-bold text-gray-400 dark:text-gray-500 uppercase">Store Address</p>
-                  <p className="text-sm font-semibold text-gray-800 dark:text-gray-200 mt-0.5">Shahganj, Sadar Bazar, Ab Nagar, Unnao, Uttar Pradesh 209801</p>
-                  <a href="https://maps.app.goo.gl/bXzJuwiovM4x1Rsk6?g_st=ac" target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs font-bold text-blue-600 dark:text-blue-400 mt-2 hover:underline transition"><ExternalLink size={13} /> Open in Google Maps</a>
+                  <p className="text-[11px] font-extrabold text-gray-400 dark:text-gray-500 uppercase tracking-widest">Store Address</p>
+                  <p className="text-sm font-bold text-gray-800 dark:text-gray-200 mt-1 leading-relaxed">Shahganj, Sadar Bazar, Ab Nagar, Unnao, Uttar Pradesh 209801</p>
+                  <a href="https://maps.app.goo.gl/bXzJuwiovM4x1Rsk6?g_st=ac" target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 text-xs font-bold text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/20 px-3 py-1.5 rounded-lg border border-blue-100 dark:border-blue-800/50 mt-3 hover:bg-blue-100 dark:hover:bg-blue-900/40 transition"><ExternalLink size={14} /> Open Map</a>
                 </div>
               </div>
-              <div className="flex items-center gap-3 bg-gray-50 dark:bg-[#1a1a1a] p-3.5 rounded-2xl border border-gray-100 dark:border-gray-800">
-                <Phone className="text-green-500 shrink-0" size={20} />
+              <div className="flex items-center gap-3 bg-gray-50 dark:bg-[#1a1a1a] p-4 rounded-2xl border border-gray-100 dark:border-gray-800 transition hover:shadow-md">
+                <Phone className="text-green-500 shrink-0" size={22} />
                 <div>
-                  <p className="text-xs font-bold text-gray-400 dark:text-gray-500 uppercase">Helpline Number</p>
-                  <p className="text-sm font-semibold text-gray-800 dark:text-gray-200 mt-0.5">+91 63882 93005</p>
+                  <p className="text-[11px] font-extrabold text-gray-400 dark:text-gray-500 uppercase tracking-widest">Helpline</p>
+                  <p className="text-lg font-black text-gray-900 dark:text-white mt-0.5 tracking-wide">+91 63882 93005</p>
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-3 pt-2">
-                <a href="tel:+916388293005" className="flex items-center justify-center gap-2 bg-green-600 hover:bg-green-700 text-white font-bold py-3 rounded-xl transition shadow-md text-sm"><Phone size={16} /> Call Now</a>
-                <a href="https://wa.me/916388293005" target="_blank" rel="noreferrer" className="flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 rounded-xl transition shadow-md text-sm"><MessageCircle size={16} /> WhatsApp</a>
+                <a href="tel:+916388293005" className="flex items-center justify-center gap-2 bg-gray-900 dark:bg-white text-white dark:text-gray-900 hover:bg-gray-800 dark:hover:bg-gray-200 font-extrabold py-3.5 rounded-xl transition shadow-md text-sm active:scale-95"><Phone size={18} /> Call Now</a>
+                <a href="https://wa.me/916388293005" target="_blank" rel="noreferrer" className="flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold py-3.5 rounded-xl transition shadow-md text-sm active:scale-95"><MessageCircle size={18} /> WhatsApp</a>
               </div>
             </div>
           </div>
