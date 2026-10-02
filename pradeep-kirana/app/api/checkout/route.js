@@ -91,6 +91,9 @@ export async function POST(req) {
     const address = customerDetails.address;
     const orderType = customerDetails.orderType;
     const paymentMethod = customerDetails.paymentMethod;
+    // 🔴 1. Extract lat and lng from request
+    const lat = customerDetails.lat;
+    const lng = customerDetails.lng;
 
     if (typeof name !== "string" || name.trim().length < 1 || name.trim().length > 50) {
       return jsonError("Invalid customer name.", 400);
@@ -108,8 +111,14 @@ export async function POST(req) {
       return jsonError("Invalid payment method.", 400);
     }
 
-    if (orderType === "Delivery" && (typeof address !== "string" || address.trim().length < 5 || address.trim().length > 200)) {
-      return jsonError("Invalid delivery address.", 400);
+    // 🔴 2. STRICT Location Validation for Delivery
+    if (orderType === "Delivery") {
+      if (typeof address !== "string" || address.trim().length < 5 || address.trim().length > 200) {
+        return jsonError("Invalid delivery address.", 400);
+      }
+      if (typeof lat !== "number" || typeof lng !== "number" || !Number.isFinite(lat) || !Number.isFinite(lng)) {
+        return jsonError("Live location coordinates are strictly required for Home Delivery.", 400);
+      }
     }
 
     if (orderType === "Pickup" && address !== undefined && typeof address !== "string") {
@@ -140,7 +149,6 @@ export async function POST(req) {
     });
 
     await adminDb.runTransaction(async (transaction) => {
-      // ✅ FIX 1: Active Order Check logic improved to avoid composite index error
       const activeQuery = adminDb.collection("orders")
         .where("customerId", "==", uid);
       
@@ -297,12 +305,15 @@ export async function POST(req) {
         promoCodeUsed,
         deliveryFee,
         totalAmount: finalPaise / 100,
+        // 🔴 3. Saving lat/lng securely to the database
         customerDetails: {
           name: name.trim(),
           phone: phone.trim(),
           address: orderType === "Delivery" ? address.trim() : "Store Pickup",
           orderType,
           paymentMethod,
+          lat: orderType === "Delivery" ? lat : null,
+          lng: orderType === "Delivery" ? lng : null,
         },
         status: "Pending",
         orderDate: new Date(),
@@ -336,7 +347,6 @@ export async function POST(req) {
       return jsonError(publicErrors[code][1], publicErrors[code][0]);
     }
 
-    // ✅ FIX 2: Enhanced developer logging for catching actual Firestore errors
     console.error("Checkout error", {
       uid,
       message: error?.message,

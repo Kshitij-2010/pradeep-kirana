@@ -140,7 +140,6 @@ export default function CheckoutPage() {
       const open = oh * 60 + om;
       const close = ch * 60 + cm;
 
-      // Handles overnight opening hours.
       if (close < open) {
         return current >= open || current <= close;
       }
@@ -340,11 +339,6 @@ export default function CheckoutPage() {
     setPromoError("");
 
     try {
-      /*
-       * This is only a UX preview.
-       * The checkout API performs the authoritative
-       * coupon validation again.
-       */
       const { collection, query, where, getDocs } =
         await import("firebase/firestore");
 
@@ -519,11 +513,6 @@ export default function CheckoutPage() {
   const handlePlaceOrder = async (e: any) => {
     e.preventDefault();
 
-    // ----------------------------------------------------------
-    // Client-side checks are for UX only.
-    // The API performs the authoritative security checks.
-    // ----------------------------------------------------------
-
     if (!isStoreOpen || storeStatus.storePaused) {
       showToast(
         "Store is currently closed. Cannot accept orders right now.",
@@ -556,10 +545,17 @@ export default function CheckoutPage() {
       return;
     }
 
-    // ----------------------------------------------------------
-    // Validate customer input before sending it to the API.
-    // The API validates it again.
-    // ----------------------------------------------------------
+    // 🔴 1. FRONTEND LOCATION VALIDATION 🔴
+    if (formData.orderType === "Delivery" && !locationCoords) {
+      showToast(
+        "Please attach your live location. It is required for Home Delivery.",
+        "error"
+      );
+      
+      // Scroll to top so user sees the error and location button
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      return;
+    }
 
     const name = formData.name.trim();
     const phone = formData.phone.trim();
@@ -624,10 +620,7 @@ export default function CheckoutPage() {
       return;
     }
 
-    // ----------------------------------------------------------
     // Cart validation
-    // ----------------------------------------------------------
-
     if (
       !Array.isArray(cart) ||
       cart.length === 0 ||
@@ -660,7 +653,6 @@ export default function CheckoutPage() {
       return;
     }
 
-    // Validate basic cart values before sending.
     for (const item of cart) {
       if (
         typeof item.id !== "string" ||
@@ -691,14 +683,6 @@ export default function CheckoutPage() {
     setLoading(true);
 
     try {
-      // --------------------------------------------------------
-      // IMPORTANT:
-      // Never send UID in the request body.
-      //
-      // The backend verifies this Firebase ID token and
-      // derives the UID from the verified token.
-      // --------------------------------------------------------
-
       const idToken =
         await currentUser.getIdToken(true);
 
@@ -732,12 +716,12 @@ export default function CheckoutPage() {
 
           paymentMethod:
             formData.paymentMethod,
+            
+          // 🔴 2. SEND COORDS TO BACKEND API 🔴
+          lat: locationCoords?.lat || null,
+          lng: locationCoords?.lng || null
         },
       };
-
-      // --------------------------------------------------------
-      // Secure API request
-      // --------------------------------------------------------
 
       const response = await fetch(
         "/api/checkout",
@@ -778,13 +762,7 @@ export default function CheckoutPage() {
         );
       }
 
-      // --------------------------------------------------------
-      // ORDER IS NOW SUCCESSFULLY CREATED.
-      //
-      // Saving the address is a separate operation.
-      // If this fails, DO NOT tell the user their order failed.
-      // --------------------------------------------------------
-
+      // Saving Address & Location to User Profile
       if (
         saveAddress &&
         formData.orderType ===
@@ -801,6 +779,10 @@ export default function CheckoutPage() {
               name,
               phone,
               address,
+              
+              // 🔴 3. SAVE TO USER PROFILE FIREBASE 🔴
+              lat: locationCoords?.lat || null,
+              lng: locationCoords?.lng || null,
 
               photoURL:
                 currentUser.photoURL ||
@@ -824,10 +806,6 @@ export default function CheckoutPage() {
           );
         }
       }
-
-      // --------------------------------------------------------
-      // Clear cart ONLY after the API confirms success.
-      // --------------------------------------------------------
 
       if (clearCart) {
         clearCart();
@@ -1374,6 +1352,13 @@ export default function CheckoutPage() {
                     Attached
                   </div>
                 </div>
+              )}
+              
+              {/* Validation Highlight for missing location */}
+              {!locationCoords && (
+                <p className="text-xs text-red-500 font-bold mt-1">
+                  * Live location is required for delivery
+                </p>
               )}
 
               <div className="flex items-center gap-2 mt-2">
