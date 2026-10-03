@@ -5,7 +5,7 @@ import { collection, query, where, orderBy, onSnapshot, doc, updateDoc, getDoc }
 import { onAuthStateChanged } from "firebase/auth";
 import { db, auth } from "@/lib/firebase";
 import { useRouter } from "next/navigation";
-import { Package, Clock, CheckCircle, Bike, Store, ArrowLeft, ChevronRight, Tag, Truck, X, CheckCircle2, RotateCcw, AlertTriangle } from "lucide-react";
+import { Package, Clock, CheckCircle, Bike, Store, ArrowLeft, ChevronRight, Tag, Truck, X, CheckCircle2, RotateCcw, AlertTriangle, Calendar } from "lucide-react";
 import { useCart } from "@/context/CartContext";
 
 // Modern & Soothing Success Notification Sound
@@ -55,6 +55,12 @@ const playAlertSound = () => {
     playTone(349.23, 'triangle', 0, 0.4);    // F4
     playTone(311.13, 'triangle', 0.15, 0.5); // Eb4
   } catch (e) { console.error(e); }
+};
+
+const formatDate = (dateObj: any) => {
+  if (!dateObj) return "Just now";
+  if (dateObj.toDate) return dateObj.toDate().toLocaleString('en-IN');
+  return new Date(dateObj).toLocaleString('en-IN');
 };
 
 export default function OrdersPage() {
@@ -209,6 +215,7 @@ export default function OrdersPage() {
           <div className="space-y-6">
             {orders.map((order) => {
               const isPickup = order.customerDetails?.orderType === "Pickup" || order.deliveryType === "Pickup";
+              const isDelivery = !isPickup;
               const isCancelled = order.status === "Cancelled";
               const currentIndex = getStatusIndex(order.status, isPickup);
               
@@ -221,16 +228,32 @@ export default function OrdersPage() {
               return (
                 <div key={order.id} className="bg-white dark:bg-[#121212] rounded-2xl shadow-sm border border-gray-200 dark:border-gray-800 overflow-hidden transition-colors">
                   
-                  <div className="p-5 border-b border-gray-100 dark:border-gray-800 flex justify-between items-start bg-gray-50/50 dark:bg-[#1e1e1e]/50">
-                    <div>
-                      <p className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-1">Order ID</p>
-                      <h3 className="font-black text-gray-900 dark:text-white text-lg">{order.orderId || "OLD-ORDER"}</h3>
-                      <p className="text-xs text-gray-500 mt-1 font-medium">{order.orderDate?.toDate ? order.orderDate.toDate().toLocaleString('en-IN') : 'Just now'}</p>
-                    </div>
-                    <div className="text-right flex flex-col items-end">
-                      <span className={`px-3 py-1 rounded-full text-[10px] font-extrabold uppercase tracking-wider border flex items-center gap-1 ${isPickup ? 'bg-orange-100 text-orange-800 border-orange-200 dark:bg-orange-900/30 dark:text-orange-400 dark:border-orange-800/50' : 'bg-blue-100 text-blue-800 border-blue-200 dark:bg-blue-900/30 dark:text-blue-400 dark:border-blue-800/50'}`}>
-                        {isPickup ? <Store size={12}/> : <Truck size={12}/>} {isPickup ? 'PICKUP' : 'DELIVERY'}
-                      </span>
+                  {/* ================= ORDER CARD HEADER ================= */}
+                  <div className="p-5 border-b border-gray-100 dark:border-gray-800 bg-gray-50/50 dark:bg-[#1e1e1e]/50">
+                    <div className="flex justify-between items-start mb-2">
+                      <div>
+                        <p className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-1">Order ID</p>
+                        <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
+                          <h3 className="font-black text-gray-900 dark:text-white text-xl sm:text-2xl">{order.orderId || "OLD-ORDER"}</h3>
+                          
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className={`px-3 py-1 rounded-full text-[10px] font-extrabold uppercase tracking-wider border flex items-center gap-1 shrink-0 ${isPickup ? 'bg-orange-100 text-orange-800 border-orange-200 dark:bg-orange-900/30 dark:text-orange-400 dark:border-orange-800/50' : 'bg-blue-100 text-blue-800 border-blue-200 dark:bg-blue-900/30 dark:text-blue-400 dark:border-blue-800/50'}`}>
+                              {isPickup ? <Store size={12}/> : <Truck size={12}/>} {isPickup ? 'PICKUP' : 'DELIVERY'}
+                            </span>
+                            
+                            {/* 🔴 "Waiting for delivery partner" notification badge 🔴 */}
+                            {order.status === "Pending" && isDelivery && (
+                              <span className="text-yellow-600 dark:text-yellow-400 text-[11px] font-bold animate-pulse flex items-center gap-1 bg-yellow-100 dark:bg-yellow-900/20 px-2.5 py-1 rounded-md border border-yellow-200 dark:border-yellow-800/30 shrink-0">
+                                <Clock size={12} /> Waiting for a delivery partner to accept...
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                        <div className="text-xs text-gray-500 mt-2 font-medium flex items-center gap-1.5">
+                          <Calendar size={12} className="text-gray-400" />
+                          {formatDate(order.orderDate)}
+                        </div>
+                      </div>
                     </div>
                   </div>
 
@@ -245,6 +268,12 @@ export default function OrdersPage() {
                           <p className="text-xs font-medium text-red-500 dark:text-red-300 mt-1 bg-red-100/50 dark:bg-red-900/40 px-3 py-1.5 rounded-lg border border-red-200 dark:border-red-800/40">
                             Reason: {order.cancellationReason}
                           </p>
+                        )}
+                        {/* Auto-cancel fallback reason in UI if DB missing reason field but status is Cancelled */}
+                        {!order.cancellationReason && (
+                           <p className="text-xs font-medium text-red-500 dark:text-red-300 mt-1 bg-red-100/50 dark:bg-red-900/40 px-3 py-1.5 rounded-lg border border-red-200 dark:border-red-800/40">
+                            Reason: Auto-Cancelled (No partner found within 10 minutes)
+                           </p>
                         )}
                       </div>
                     ) : (
@@ -266,7 +295,7 @@ export default function OrdersPage() {
                                   {stepNum === 3 && (isPickup ? <Store size={14} /> : <Bike size={14} className={isCurrent ? "animate-bounce" : ""} />)}
                                   {stepNum === 4 && <CheckCircle size={14} />}
                                 </div>
-                                <span className={`text-[10px] sm:text-xs font-bold mt-2 ${isActive ? 'text-green-700 dark:text-green-400' : 'text-gray-400 dark:text-gray-600'}`}>{step}</span>
+                                <span className={`text-[10px] sm:text-xs font-bold mt-2 text-center max-w-[60px] leading-tight ${isActive ? 'text-green-700 dark:text-green-400' : 'text-gray-400 dark:text-gray-600'}`}>{step}</span>
                               </div>
                             );
                           })}
