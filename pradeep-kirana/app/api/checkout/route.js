@@ -91,7 +91,6 @@ export async function POST(req) {
     const address = customerDetails.address;
     const orderType = customerDetails.orderType;
     const paymentMethod = customerDetails.paymentMethod;
-    // 🔴 1. Extract lat and lng from request
     const lat = customerDetails.lat;
     const lng = customerDetails.lng;
 
@@ -111,7 +110,6 @@ export async function POST(req) {
       return jsonError("Invalid payment method.", 400);
     }
 
-    // 🔴 2. STRICT Location Validation for Delivery
     if (orderType === "Delivery") {
       if (typeof address !== "string" || address.trim().length < 5 || address.trim().length > 200) {
         return jsonError("Invalid delivery address.", 400);
@@ -206,6 +204,15 @@ export async function POST(req) {
 
         const product = snap.data();
         const qty = normalizedItems[index].cartQuantity;
+        
+        // 🔴 SECURE BOGO/B2G1 CALCULATION ON SERVER 🔴
+        let payableQty = qty;
+        if (product.offerType === "BOGO") {
+          payableQty = Math.ceil(qty / 2);
+        } else if (product.offerType === "B2G1") {
+          payableQty = qty - Math.floor(qty / 3);
+        }
+
         const price = Number(product.price);
         const stock = Number(product.stockQuantity);
 
@@ -222,7 +229,7 @@ export async function POST(req) {
         }
 
         const pricePaise = Math.round(price * 100);
-        totalPaise += pricePaise * qty;
+        totalPaise += pricePaise * payableQty; // Using payableQty instead of raw qty
 
         if (!Number.isSafeInteger(totalPaise)) {
           const err = new Error("ORDER_TOTAL_TOO_LARGE");
@@ -235,7 +242,10 @@ export async function POST(req) {
           name: typeof product.name === "string" ? product.name.slice(0, 150) : "Product",
           price,
           cartQuantity: qty,
+          payableQuantity: payableQty,
           imageUrl: typeof product.imageUrl === "string" ? product.imageUrl.slice(0, 1000) : "",
+          offerType: product.offerType || "",
+          offerText: product.offerText || "",
         });
 
         stockUpdates.push({ ref: productRefs[index], newStock: stock - qty });
@@ -305,7 +315,6 @@ export async function POST(req) {
         promoCodeUsed,
         deliveryFee,
         totalAmount: finalPaise / 100,
-        // 🔴 3. Saving lat/lng securely to the database
         customerDetails: {
           name: name.trim(),
           phone: phone.trim(),

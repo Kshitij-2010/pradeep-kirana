@@ -10,6 +10,8 @@ export interface CartItem {
   imageUrl?: string;
   stockQuantity: number;
   cartQuantity: number;
+  offerType?: string;
+  offerText?: string;
 }
 
 export interface CartContextType {
@@ -106,7 +108,17 @@ export function CartProvider({ children }: { children: ReactNode }) {
     localStorage.removeItem("pradeep_cart");
   };
 
-  const cartTotal = cart.reduce((total, item) => total + (item.price * item.cartQuantity), 0);
+  // 🔴 DYNAMIC CART TOTAL CALCULATION WITH OFFERS (BOGO / B2G1) 🔴
+  const cartTotal = cart.reduce((total, item) => {
+    let payableQty = item.cartQuantity;
+    if (item.offerType === "BOGO") {
+      payableQty = Math.ceil(item.cartQuantity / 2);
+    } else if (item.offerType === "B2G1") {
+      payableQty = item.cartQuantity - Math.floor(item.cartQuantity / 3);
+    }
+    return total + (payableQty * Number(item.price));
+  }, 0);
+
   const cartCount = cart.reduce((count, item) => count + item.cartQuantity, 0);
 
   return (

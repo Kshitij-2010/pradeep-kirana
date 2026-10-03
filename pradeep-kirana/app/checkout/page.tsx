@@ -545,14 +545,12 @@ export default function CheckoutPage() {
       return;
     }
 
-    // 🔴 1. FRONTEND LOCATION VALIDATION 🔴
     if (formData.orderType === "Delivery" && !locationCoords) {
       showToast(
         "Please attach your live location. It is required for Home Delivery.",
         "error"
       );
       
-      // Scroll to top so user sees the error and location button
       window.scrollTo({ top: 0, behavior: 'smooth' });
       return;
     }
@@ -687,12 +685,19 @@ export default function CheckoutPage() {
         await currentUser.getIdToken(true);
 
       const orderPayload = {
-        items: cart.map((item: any) => ({
-          id: String(item.id),
-          cartQuantity: Number(
-            item.cartQuantity
-          ),
-        })),
+        // 🔴 UPDATED: Send calculated payable quantities to API to avoid backend mismatch 🔴
+        items: cart.map((item: any) => {
+          let payableQty = item.cartQuantity;
+          if (item.offerType === "BOGO") payableQty = Math.ceil(item.cartQuantity / 2);
+          else if (item.offerType === "B2G1") payableQty = item.cartQuantity - Math.floor(item.cartQuantity / 3);
+          
+          return {
+            id: String(item.id),
+            cartQuantity: Number(item.cartQuantity),
+            payableQuantity: Number(payableQty), // Send this so API knows
+            price: Number(item.price)
+          };
+        }),
 
         couponCode:
           appliedPromo?.code
@@ -717,10 +722,12 @@ export default function CheckoutPage() {
           paymentMethod:
             formData.paymentMethod,
             
-          // 🔴 2. SEND COORDS TO BACKEND API 🔴
           lat: locationCoords?.lat || null,
           lng: locationCoords?.lng || null
         },
+        
+        // Ensure we send cartTotal explicitly so API doesn't blindly multiply price*qty
+        clientCalculatedTotal: cartTotal
       };
 
       const response = await fetch(
@@ -780,7 +787,6 @@ export default function CheckoutPage() {
               phone,
               address,
               
-              // 🔴 3. SAVE TO USER PROFILE FIREBASE 🔴
               lat: locationCoords?.lat || null,
               lng: locationCoords?.lng || null,
 
@@ -925,25 +931,38 @@ export default function CheckoutPage() {
             Order Summary
           </h2>
 
-          {cart.map((item: any) => (
-            <div
-              key={item.id}
-              className="flex justify-between text-sm mb-2 text-gray-700 dark:text-gray-300"
-            >
-              <span>
-                {item.cartQuantity}x{" "}
-                {item.name}
-              </span>
+          {cart.map((item: any) => {
+            // 🔴 UPDATED: Dynamic Price Calculation for Summary UI 🔴
+            let payableQty = item.cartQuantity;
+            if (item.offerType === "BOGO") payableQty = Math.ceil(item.cartQuantity / 2);
+            else if (item.offerType === "B2G1") payableQty = item.cartQuantity - Math.floor(item.cartQuantity / 3);
+            
+            const itemTotalPrice = payableQty * Number(item.price);
+            const freeQty = item.cartQuantity - payableQty;
 
-              <span className="font-semibold text-gray-900 dark:text-white">
-                ₹
-                {(
-                  item.price *
-                  item.cartQuantity
-                ).toFixed(2)}
-              </span>
-            </div>
-          ))}
+            return (
+              <div
+                key={item.id}
+                className="flex justify-between items-start text-sm mb-2 text-gray-700 dark:text-gray-300"
+              >
+                <div className="flex flex-col">
+                  <span>
+                    {item.cartQuantity}x{" "}
+                    {item.name}
+                  </span>
+                  {freeQty > 0 && (
+                    <span className="text-[10px] w-fit mt-0.5 bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400 font-extrabold px-1.5 py-0.5 rounded shadow-sm">
+                      {freeQty} FREE 🎉
+                    </span>
+                  )}
+                </div>
+
+                <span className="font-semibold text-gray-900 dark:text-white mt-0.5">
+                  ₹{itemTotalPrice.toFixed(2)}
+                </span>
+              </div>
+            );
+          })}
 
           <div className="border-t border-gray-200 dark:border-gray-700 mt-3 pt-3 space-y-2 text-sm text-gray-700 dark:text-gray-300">
 

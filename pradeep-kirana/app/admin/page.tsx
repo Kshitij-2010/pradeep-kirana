@@ -4,7 +4,7 @@ import { useEffect, useState, useRef } from "react";
 import { collection, query, orderBy, onSnapshot, doc, getDoc, setDoc, updateDoc, addDoc, deleteDoc, runTransaction } from "firebase/firestore";
 import { signInWithPopup, signOut, onAuthStateChanged } from "firebase/auth";
 import { db, auth, googleProvider } from "@/lib/firebase";
-import { MapPin, Phone, ExternalLink, Package, Clock, CheckCircle, Bike, Box, Search, Save, Plus, X, Trash2, Link, Pencil, Calendar, CreditCard, Store, Truck, Lock, TrendingUp, AlertTriangle, Users, Filter, MessageCircle, Star, Tag, Download, Settings, ShieldCheck, CheckCircle2 } from "lucide-react";
+import { MapPin, Phone, ExternalLink, Package, Clock, CheckCircle, Bike, Box, Search, Save, Plus, X, Trash2, Link, Pencil, Calendar, CreditCard, Store, Truck, Lock, TrendingUp, AlertTriangle, Users, Filter, MessageCircle, Star, Tag, Download, Settings, ShieldCheck, CheckCircle2, Zap } from "lucide-react";
 
 const playNotificationSound = () => {
   try {
@@ -74,11 +74,12 @@ export default function AdminDashboard() {
   const [cancellingOrderId, setCancellingOrderId] = useState<string | null>(null);
   const [cancellationReason, setCancellationReason] = useState("");
 
-  const [activeTab, setActiveTab] = useState<"orders" | "inventory" | "customers" | "reviews" | "coupons" | "settings">("orders");
+  const [activeTab, setActiveTab] = useState<"orders" | "inventory" | "customers" | "reviews" | "coupons" | "offers" | "settings">("orders");
   const [orders, setOrders] = useState<any[]>([]);
   const [products, setProducts] = useState<any[]>([]);
   const [reviews, setReviews] = useState<any[]>([]);
   const [coupons, setCoupons] = useState<any[]>([]);
+  const [offers, setOffers] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   
   const [viewedReviewIds, setViewedReviewIds] = useState<Set<string>>(new Set());
@@ -96,7 +97,8 @@ export default function AdminDashboard() {
 
   const [showAddModal, setShowAddModal] = useState(false);
   const [addingProduct, setAddingProduct] = useState(false);
-  const [newItem, setNewItem] = useState({ name: "", category: "Atta & Dal", price: "", stockQuantity: "", unit: "", imageUrl: "" });
+  
+  const [newItem, setNewItem] = useState({ name: "", category: "Atta & Dal", price: "", originalPrice: "", stockQuantity: "", unit: "", imageUrl: "", offerText: "", offerId: "" });
   const [isAddingCustomCategory, setIsAddingCustomCategory] = useState(false);
   const [customCategoryName, setCustomCategoryName] = useState("");
 
@@ -107,6 +109,11 @@ export default function AdminDashboard() {
   const [showCouponModal, setShowCouponModal] = useState(false);
   const [newCoupon, setNewCoupon] = useState({ code: "", discountAmount: "", minOrderAmount: "" });
   const [addingCoupon, setAddingCoupon] = useState(false);
+
+  // Offers State
+  const [showOfferModal, setShowOfferModal] = useState(false);
+  const [newOffer, setNewOffer] = useState({ name: "", label: "", type: "BOGO" });
+  const [addingOffer, setAddingOffer] = useState(false);
 
   const isFirstLoad = useRef(true);
   const checkedGlitchesRef = useRef<Set<string>>(new Set());
@@ -206,6 +213,12 @@ export default function AdminDashboard() {
       const couponData: any[] = [];
       snapshot.forEach((doc) => { couponData.push({ id: doc.id, ...doc.data() }); });
       setCoupons(couponData);
+    });
+
+    const unsubOffers = onSnapshot(query(collection(db, "offers")), (snapshot) => {
+      const offData: any[] = [];
+      snapshot.forEach((doc) => { offData.push({ id: doc.id, ...doc.data() }); });
+      setOffers(offData);
       setLoading(false);
     });
 
@@ -227,7 +240,7 @@ export default function AdminDashboard() {
       }
     });
 
-    return () => { unsubOrders(); unsubProducts(); unsubReviews(); unsubCoupons(); unsubStoreStatus(); unsubDeliveryConfig(); };
+    return () => { unsubOrders(); unsubProducts(); unsubReviews(); unsubCoupons(); unsubOffers(); unsubStoreStatus(); unsubDeliveryConfig(); };
   }, [isAuthenticated]);
 
   // ================= LEGACY READ-ONLY GLITCH SCANNER =================
@@ -480,12 +493,41 @@ export default function AdminDashboard() {
     setAddingCoupon(false);
   };
 
+  // Add Offer Function
+  const handleAddOffer = async (e: any) => {
+    e.preventDefault(); 
+    setAddingOffer(true);
+    try {
+      await addDoc(collection(db, "offers"), { name: newOffer.name, label: newOffer.label.toUpperCase(), type: newOffer.type, active: true });
+      setShowOfferModal(false); 
+      setNewOffer({ name: "", label: "", type: "BOGO" });
+      showToast("Offer created successfully! 🎁", "success");
+    } catch(e) { showToast("Failed to create offer.", "error"); }
+    setAddingOffer(false);
+  };
+
   const handleAddProduct = async (e: any) => {
     e.preventDefault(); setAddingProduct(true);
     const finalCategory = isAddingCustomCategory ? customCategoryName : newItem.category;
+    const selectedOffer = offers.find(o => o.id === newItem.offerId) || null;
+
     try {
-      await addDoc(collection(db, "items"), { name: newItem.name, category: finalCategory, price: Number(newItem.price), stockQuantity: Number(newItem.stockQuantity), unit: newItem.unit, imageUrl: newItem.imageUrl, isAvailable: true });
-      setShowAddModal(false); setNewItem({ name: "", category: "Atta & Dal", price: "", stockQuantity: "", unit: "", imageUrl: "" });
+      await addDoc(collection(db, "items"), { 
+        name: newItem.name, 
+        category: finalCategory, 
+        price: Number(newItem.price), 
+        originalPrice: newItem.originalPrice ? Number(newItem.originalPrice) : null,
+        stockQuantity: Number(newItem.stockQuantity), 
+        unit: newItem.unit, 
+        imageUrl: newItem.imageUrl, 
+        offerId: selectedOffer ? selectedOffer.id : null,
+        offerText: selectedOffer ? selectedOffer.label : "", // Visual badge
+        offerType: selectedOffer ? selectedOffer.type : "",   // Math logic (BOGO, etc)
+        isAvailable: true 
+      });
+
+      setShowAddModal(false); 
+      setNewItem({ name: "", category: "Atta & Dal", price: "", originalPrice: "", stockQuantity: "", unit: "", imageUrl: "", offerText: "", offerId: "" });
       setIsAddingCustomCategory(false); setCustomCategoryName(""); 
       showToast("Product Added successfully! 🎉", "success");
     } catch (error) { showToast("Error adding product.", "error"); }
@@ -494,8 +536,22 @@ export default function AdminDashboard() {
 
   const handleSaveEdit = async (e: any) => {
     e.preventDefault(); setSavingEdit(true);
+    const selectedOffer = offers.find(o => o.id === editingProduct.offerId) || null;
+
     try {
-      await updateDoc(doc(db, "items", editingProduct.id), { name: editingProduct.name, category: editingProduct.category, price: Number(editingProduct.price), stockQuantity: Number(editingProduct.stockQuantity), unit: editingProduct.unit, imageUrl: editingProduct.imageUrl });
+      await updateDoc(doc(db, "items", editingProduct.id), { 
+        name: editingProduct.name, 
+        category: editingProduct.category, 
+        price: Number(editingProduct.price), 
+        originalPrice: editingProduct.originalPrice ? Number(editingProduct.originalPrice) : null,
+        stockQuantity: Number(editingProduct.stockQuantity), 
+        unit: editingProduct.unit, 
+        imageUrl: editingProduct.imageUrl,
+        offerId: selectedOffer ? selectedOffer.id : null,
+        offerText: selectedOffer ? selectedOffer.label : "",
+        offerType: selectedOffer ? selectedOffer.type : "", 
+      });
+
       setShowEditModal(false); setEditingProduct(null); 
       showToast("Updated successfully! ✅", "success");
     } catch (error) { showToast("Error updating.", "error"); }
@@ -697,6 +753,8 @@ export default function AdminDashboard() {
           <button onClick={() => setActiveTab("inventory")} className={`shrink-0 flex items-center justify-center gap-2 px-4 py-2.5 md:py-3 rounded-xl text-sm font-bold transition ${activeTab === "inventory" ? "bg-green-50 dark:bg-green-900/30 text-green-700 dark:text-green-400 border border-green-200 dark:border-green-800/50" : "text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-[#1a1a1a]"}`}><Box size={18} /> Inventory</button>
           <button onClick={() => setActiveTab("customers")} className={`shrink-0 flex items-center justify-center gap-2 px-4 py-2.5 md:py-3 rounded-xl text-sm font-bold transition ${activeTab === "customers" ? "bg-green-50 dark:bg-green-900/30 text-green-700 dark:text-green-400 border border-green-200 dark:border-green-800/50" : "text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-[#1a1a1a]"}`}><Users size={18} /> Customers</button>
           <button onClick={() => setActiveTab("coupons")} className={`shrink-0 flex items-center justify-center gap-2 px-4 py-2.5 md:py-3 rounded-xl text-sm font-bold transition ${activeTab === "coupons" ? "bg-green-50 dark:bg-green-900/30 text-green-700 dark:text-green-400 border border-green-200 dark:border-green-800/50" : "text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-[#1a1a1a]"}`}><Tag size={18} /> Coupons</button>
+          {/* 🔴 NEW OFFERS TAB 🔴 */}
+          <button onClick={() => setActiveTab("offers")} className={`shrink-0 flex items-center justify-center gap-2 px-4 py-2.5 md:py-3 rounded-xl text-sm font-bold transition ${activeTab === "offers" ? "bg-green-50 dark:bg-green-900/30 text-green-700 dark:text-green-400 border border-green-200 dark:border-green-800/50" : "text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-[#1a1a1a]"}`}><Zap size={18} /> Offers</button>
           <button onClick={() => setActiveTab("settings")} className={`shrink-0 flex items-center justify-center gap-2 px-4 py-2.5 md:py-3 rounded-xl text-sm font-bold transition ${activeTab === "settings" ? "bg-green-50 dark:bg-green-900/30 text-green-700 dark:text-green-400 border border-green-200 dark:border-green-800/50" : "text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-[#1a1a1a]"}`}><Settings size={18} /> Settings</button>
           <button onClick={() => setActiveTab("reviews")} className={`shrink-0 flex items-center justify-center gap-2 px-4 py-2.5 md:py-3 rounded-xl text-sm font-bold transition ${activeTab === "reviews" ? "bg-green-50 dark:bg-green-900/30 text-green-700 dark:text-green-400 border border-green-200 dark:border-green-800/50" : "text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-[#1a1a1a]"}`}><Star size={18} /> Reviews {unreadReviewsCount > 0 && <span className="bg-blue-500 text-white text-[10px] px-2 py-0.5 rounded-full">{unreadReviewsCount}</span>}</button>
         </div>
@@ -825,7 +883,12 @@ export default function AdminDashboard() {
                                 {isLowStock && <span className="bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-400 text-[9px] md:text-[10px] px-1.5 md:px-2 py-0.5 rounded font-extrabold border border-red-200 dark:border-red-800/50 flex items-center gap-1 animate-pulse"><AlertTriangle size={10} /> Low Stock</span>}
                               </h3>
                               <p className="text-[11px] md:text-sm text-gray-500 dark:text-gray-400">{product.category} • {product.unit}</p>
-                              <p className="font-bold text-green-600 dark:text-green-500 mt-0.5 md:mt-1 text-sm md:text-base">₹{product.price}</p>
+                              <div className="flex items-center gap-2 mt-0.5 md:mt-1">
+                                <p className="font-bold text-green-600 dark:text-green-500 text-sm md:text-base">₹{product.price}</p>
+                                {product.originalPrice && product.originalPrice > product.price && (
+                                  <p className="text-[10px] md:text-xs text-gray-400 line-through font-semibold">₹{product.originalPrice}</p>
+                                )}
+                              </div>
                             </div>
                           </div>
                           <div className="flex items-center justify-between md:justify-end gap-2 md:gap-4 w-full md:w-auto mt-2 md:mt-0 pt-3 md:pt-0 border-t border-gray-100 md:border-t-0 dark:border-gray-800">
@@ -1010,6 +1073,36 @@ export default function AdminDashboard() {
                   </div>
                 </div>
               )}
+
+              {/* 🔴 NEW OFFERS TAB 🔴 */}
+              {activeTab === "offers" && (
+                <div className="bg-white dark:bg-[#121212] p-4 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-800">
+                  <div className="mb-6 flex items-center justify-between border-b border-gray-200 dark:border-gray-800 pb-4">
+                    <h2 className="text-lg font-bold text-gray-900 dark:text-white flex items-center gap-2"><Zap className="text-yellow-500" size={20} /> Product Offers (BOGO)</h2>
+                    <button onClick={() => setShowOfferModal(true)} className="flex items-center gap-1 bg-yellow-500 hover:bg-yellow-600 text-white px-4 py-2 rounded-lg font-bold transition"><Plus size={16} /> Create Offer</button>
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    {offers.map((offer) => (
+                      <div key={offer.id} className="bg-gray-50 dark:bg-[#1a1a1a] p-4 rounded-xl border border-gray-200 dark:border-gray-700 border-l-4 border-l-yellow-500 shadow-sm flex flex-col transition hover:shadow-md">
+                        <div className="flex justify-between items-start mb-2">
+                          <h3 className="font-bold text-gray-900 dark:text-white">{offer.name}</h3>
+                          <button onClick={async () => { 
+                            if(window.confirm("Delete this offer? Products using this may not calculate discount properly.")) { 
+                              await deleteDoc(doc(db, "offers", offer.id)); 
+                              showToast("Offer deleted.", "info"); 
+                            } 
+                          }} className="text-gray-400 hover:text-red-500 transition"><Trash2 size={18}/></button>
+                        </div>
+                        <div className="mt-auto space-y-2 pt-2 border-t border-gray-200 dark:border-gray-700">
+                          <p className="text-sm font-medium text-gray-600 dark:text-gray-400">Badge Text: <span className="bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400 px-2 py-0.5 rounded font-black tracking-wider text-[10px] ml-1">{offer.label}</span></p>
+                          <p className="text-sm font-medium text-gray-600 dark:text-gray-400">Math Logic: <span className="font-bold text-gray-900 dark:text-white">{offer.type === "BOGO" ? "Buy 1 Get 1 Free" : "Buy 2 Get 1 Free"}</span></p>
+                        </div>
+                      </div>
+                    ))}
+                    {offers.length === 0 && <p className="text-gray-500 dark:text-gray-400 col-span-3 text-center p-8">No offers created yet.</p>}
+                  </div>
+                </div>
+              )}
             </>
           )}
         </div>
@@ -1082,15 +1175,25 @@ export default function AdminDashboard() {
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-semibold mb-1 text-gray-700 dark:text-gray-300">Price (₹)</label>
+                  <label className="block text-sm font-semibold mb-1 text-gray-700 dark:text-gray-300">Selling Price (₹)</label>
                   <input required type="number" min="0" className="w-full border border-gray-300 dark:border-gray-700 rounded-lg p-2.5 bg-gray-50 dark:bg-[#1a1a1a] text-gray-900 dark:text-white focus:ring-2 focus:ring-green-500 outline-none transition" value={newItem.price} onChange={(e) => setNewItem({...newItem, price: e.target.value})} />
                 </div>
+                <div>
+                  <label className="block text-sm font-semibold mb-1 text-gray-700 dark:text-gray-300">Original Price (₹)</label>
+                  <input type="number" min="0" placeholder="Optional MRP" className="w-full border border-gray-300 dark:border-gray-700 rounded-lg p-2.5 bg-gray-50 dark:bg-[#1a1a1a] text-gray-900 dark:text-white focus:ring-2 focus:ring-green-500 outline-none transition" value={newItem.originalPrice} onChange={(e) => setNewItem({...newItem, originalPrice: e.target.value})} />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-semibold mb-1 text-gray-700 dark:text-gray-300">Stock</label>
                   <input required type="number" min="0" className="w-full border border-gray-300 dark:border-gray-700 rounded-lg p-2.5 bg-gray-50 dark:bg-[#1a1a1a] text-gray-900 dark:text-white focus:ring-2 focus:ring-green-500 outline-none transition" value={newItem.stockQuantity} onChange={(e) => setNewItem({...newItem, stockQuantity: e.target.value})} />
                 </div>
+                <div>
+                  <label className="block text-sm font-semibold mb-1 text-gray-700 dark:text-gray-300">Unit Size</label>
+                  <input required type="text" placeholder="e.g. 5 kg" className="w-full border border-gray-300 dark:border-gray-700 rounded-lg p-2.5 bg-gray-50 dark:bg-[#1a1a1a] text-gray-900 dark:text-white focus:ring-2 focus:ring-green-500 outline-none transition" value={newItem.unit} onChange={(e) => setNewItem({...newItem, unit: e.target.value})} />
+                </div>
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 gap-4">
                 <div>
                   <label className="block text-sm font-semibold mb-1 text-gray-700 dark:text-gray-300">Category</label>
                   {isAddingCustomCategory ? (
@@ -1104,9 +1207,13 @@ export default function AdminDashboard() {
                     </select>
                   )}
                 </div>
+                {/* 🔴 NEW: SELECT OFFER DROPDOWN 🔴 */}
                 <div>
-                  <label className="block text-sm font-semibold mb-1 text-gray-700 dark:text-gray-300">Unit Size</label>
-                  <input required type="text" placeholder="e.g. 5 kg" className="w-full border border-gray-300 dark:border-gray-700 rounded-lg p-2.5 bg-gray-50 dark:bg-[#1a1a1a] text-gray-900 dark:text-white focus:ring-2 focus:ring-green-500 outline-none transition" value={newItem.unit} onChange={(e) => setNewItem({...newItem, unit: e.target.value})} />
+                  <label className="block text-sm font-semibold mb-1 text-gray-700 dark:text-gray-300">Apply BOGO Offer</label>
+                  <select className="w-full border border-gray-300 dark:border-gray-700 rounded-lg p-2.5 bg-blue-50 dark:bg-blue-900/20 text-blue-800 dark:text-blue-400 font-bold focus:ring-2 focus:ring-blue-500 outline-none transition" value={newItem.offerId} onChange={(e) => setNewItem({...newItem, offerId: e.target.value})}>
+                    <option value="">No Offer</option>
+                    {offers.map(o => <option key={o.id} value={o.id}>{o.name} ({o.label})</option>)}
+                  </select>
                 </div>
               </div>
               <button type="submit" disabled={addingProduct} className="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-3 rounded-lg mt-2 transition flex justify-center">{addingProduct ? <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div> : "Save Product"}</button>
@@ -1137,22 +1244,36 @@ export default function AdminDashboard() {
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-semibold mb-1 text-gray-700 dark:text-gray-300">Price (₹)</label>
+                  <label className="block text-sm font-semibold mb-1 text-gray-700 dark:text-gray-300">Selling Price (₹)</label>
                   <input required type="number" min="0" className="w-full border border-gray-300 dark:border-gray-700 rounded-lg p-2.5 bg-gray-50 dark:bg-[#1a1a1a] text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 outline-none transition" value={editingProduct.price} onChange={(e) => setEditingProduct({...editingProduct, price: e.target.value})} />
                 </div>
                 <div>
-                  <label className="block text-sm font-semibold mb-1 text-gray-700 dark:text-gray-300">Stock</label>
-                  <input required type="number" min="0" className="w-full border border-gray-300 dark:border-gray-700 rounded-lg p-2.5 bg-gray-50 dark:bg-[#1a1a1a] text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 outline-none transition" value={editingProduct.stockQuantity} onChange={(e) => setEditingProduct({...editingProduct, stockQuantity: e.target.value})} />
+                  <label className="block text-sm font-semibold mb-1 text-gray-700 dark:text-gray-300">Original Price (₹)</label>
+                  <input type="number" min="0" placeholder="Optional MRP" className="w-full border border-gray-300 dark:border-gray-700 rounded-lg p-2.5 bg-gray-50 dark:bg-[#1a1a1a] text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 outline-none transition" value={editingProduct.originalPrice || ""} onChange={(e) => setEditingProduct({...editingProduct, originalPrice: e.target.value})} />
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-semibold mb-1 text-gray-700 dark:text-gray-300">Category</label>
-                  <input required type="text" className="w-full border border-gray-300 dark:border-gray-700 rounded-lg p-2.5 bg-gray-50 dark:bg-[#1a1a1a] text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 outline-none transition" value={editingProduct.category} onChange={(e) => setEditingProduct({...editingProduct, category: e.target.value})} />
+                  <label className="block text-sm font-semibold mb-1 text-gray-700 dark:text-gray-300">Stock</label>
+                  <input required type="number" min="0" className="w-full border border-gray-300 dark:border-gray-700 rounded-lg p-2.5 bg-gray-50 dark:bg-[#1a1a1a] text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 outline-none transition" value={editingProduct.stockQuantity} onChange={(e) => setEditingProduct({...editingProduct, stockQuantity: e.target.value})} />
                 </div>
                 <div>
                   <label className="block text-sm font-semibold mb-1 text-gray-700 dark:text-gray-300">Unit Size</label>
                   <input required type="text" className="w-full border border-gray-300 dark:border-gray-700 rounded-lg p-2.5 bg-gray-50 dark:bg-[#1a1a1a] text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 outline-none transition" value={editingProduct.unit} onChange={(e) => setEditingProduct({...editingProduct, unit: e.target.value})} />
+                </div>
+              </div>
+              <div className="grid grid-cols-1 gap-4">
+                <div>
+                  <label className="block text-sm font-semibold mb-1 text-gray-700 dark:text-gray-300">Category</label>
+                  <input required type="text" className="w-full border border-gray-300 dark:border-gray-700 rounded-lg p-2.5 bg-gray-50 dark:bg-[#1a1a1a] text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 outline-none transition" value={editingProduct.category} onChange={(e) => setEditingProduct({...editingProduct, category: e.target.value})} />
+                </div>
+                {/* 🔴 NEW: EDIT OFFER DROPDOWN 🔴 */}
+                <div>
+                  <label className="block text-sm font-semibold mb-1 text-gray-700 dark:text-gray-300">Apply BOGO Offer</label>
+                  <select className="w-full border border-gray-300 dark:border-gray-700 rounded-lg p-2.5 bg-blue-50 dark:bg-blue-900/20 text-blue-800 dark:text-blue-400 font-bold focus:ring-2 focus:ring-blue-500 outline-none transition" value={editingProduct.offerId || ""} onChange={(e) => setEditingProduct({...editingProduct, offerId: e.target.value})}>
+                    <option value="">No Offer</option>
+                    {offers.map(o => <option key={o.id} value={o.id}>{o.name} ({o.label})</option>)}
+                  </select>
                 </div>
               </div>
               <button type="submit" disabled={savingEdit} className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-lg mt-2 transition flex justify-center">{savingEdit ? <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div> : "Save Changes"}</button>
@@ -1183,6 +1304,36 @@ export default function AdminDashboard() {
                 <input required type="number" min="0" placeholder="e.g. 500" className="w-full border border-gray-300 dark:border-gray-700 rounded-lg p-2.5 bg-gray-50 dark:bg-[#1a1a1a] text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-blue-500 transition" value={newCoupon.minOrderAmount} onChange={(e) => setNewCoupon({...newCoupon, minOrderAmount: e.target.value})} />
               </div>
               <button type="submit" disabled={addingCoupon} className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-lg mt-2 transition flex justify-center">{addingCoupon ? <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div> : "Create Coupon"}</button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ================= ADD OFFER MODAL (NEW) ================= */}
+      {showOfferModal && (
+        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <div className="bg-white dark:bg-[#121212] w-full max-w-md rounded-2xl shadow-2xl overflow-hidden border border-gray-200 dark:border-gray-800 animate-in fade-in zoom-in duration-300">
+            <div className="p-4 border-b border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-[#1e1e1e] flex justify-between items-center">
+              <h2 className="text-lg md:text-xl font-bold text-gray-900 dark:text-white flex items-center gap-2"><Zap size={20} className="text-yellow-500" /> Create Offer Rule</h2>
+              <button onClick={() => setShowOfferModal(false)} className="p-1 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-full text-gray-500 transition"><X size={20} /></button>
+            </div>
+            <form onSubmit={handleAddOffer} className="p-4 md:p-5 space-y-4">
+              <div>
+                <label className="block text-sm font-semibold mb-1 text-gray-700 dark:text-gray-300">Offer Name (Internal)</label>
+                <input required type="text" placeholder="e.g. Diwali BOGO Sale" className="w-full border border-gray-300 dark:border-gray-700 rounded-lg p-2.5 bg-gray-50 dark:bg-[#1a1a1a] text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-yellow-500 transition" value={newOffer.name} onChange={(e) => setNewOffer({...newOffer, name: e.target.value})} />
+              </div>
+              <div>
+                <label className="block text-sm font-semibold mb-1 text-gray-700 dark:text-gray-300">Public Badge Text</label>
+                <input required type="text" placeholder="e.g. BUY 1 GET 1" className="w-full border border-gray-300 dark:border-gray-700 rounded-lg p-2.5 bg-gray-50 dark:bg-[#1a1a1a] text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-yellow-500 uppercase transition" value={newOffer.label} onChange={(e) => setNewOffer({...newOffer, label: e.target.value.toUpperCase()})} />
+              </div>
+              <div>
+                <label className="block text-sm font-semibold mb-1 text-gray-700 dark:text-gray-300">Mathematical Logic</label>
+                <select className="w-full border border-gray-300 dark:border-gray-700 rounded-lg p-2.5 bg-gray-50 dark:bg-[#1a1a1a] text-gray-900 dark:text-white font-bold outline-none focus:ring-2 focus:ring-yellow-500 transition" value={newOffer.type} onChange={(e) => setNewOffer({...newOffer, type: e.target.value})}>
+                  <option value="BOGO">Buy 1 Get 1 Free</option>
+                  <option value="B2G1">Buy 2 Get 1 Free</option>
+                </select>
+              </div>
+              <button type="submit" disabled={addingOffer} className="w-full bg-yellow-500 hover:bg-yellow-600 text-white font-bold py-3 rounded-lg mt-2 transition flex justify-center">{addingOffer ? <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div> : "Create Offer"}</button>
             </form>
           </div>
         </div>

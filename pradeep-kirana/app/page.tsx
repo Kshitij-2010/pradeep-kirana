@@ -349,6 +349,7 @@ export default function BlinkitStyleStorefront() {
     filteredProducts = filteredProducts.filter(p => p.name.toLowerCase().includes(searchQuery.toLowerCase()));
   }
 
+  // Pehle normal sorting apply karo
   if (sortBy === "low-high") {
     filteredProducts.sort((a, b) => a.price - b.price);
   } else if (sortBy === "high-low") {
@@ -356,6 +357,15 @@ export default function BlinkitStyleStorefront() {
   } else if (sortBy === "rating") {
     filteredProducts.sort((a, b) => (b.ratingSum / (b.ratingCount || 1)) - (a.ratingSum / (a.ratingCount || 1)));
   }
+
+  // FIR OUT-OF-STOCK ITEMS KO NEECHE BHEJO
+  filteredProducts.sort((a, b) => {
+    const aIsOOS = a.stockQuantity <= 0 || !a.isAvailable;
+    const bIsOOS = b.stockQuantity <= 0 || !b.isAvailable;
+    if (aIsOOS && !bIsOOS) return 1; 
+    if (!aIsOOS && bIsOOS) return -1; 
+    return 0; 
+  });
 
   const topRatedProducts = [...products]
     .filter(p => (p.ratingCount || 0) > 0)
@@ -420,7 +430,6 @@ export default function BlinkitStyleStorefront() {
       <header className="bg-white/90 dark:bg-[#121212]/90 backdrop-blur-xl px-4 py-3 shadow-sm border-b border-gray-200/50 dark:border-gray-800/80 sticky top-0 z-45 transition-colors duration-300">
         <div className="max-w-4xl mx-auto flex flex-col gap-3">
           
-          {/* Top Row: Logo & Profile */}
           <div className="flex justify-between items-center">
             <div className="flex items-center gap-2.5 hover:opacity-80 transition cursor-pointer group" onClick={() => { setActiveCategory("All"); setSearchQuery(""); }}>
               <img src="/store-icon.png" alt="Pradeep Kirana" className="w-10 h-10 sm:w-12 sm:h-12 rounded-[14px] shadow-sm object-cover transition-transform duration-300 group-hover:scale-105 shrink-0" />
@@ -447,7 +456,6 @@ export default function BlinkitStyleStorefront() {
             </div>
           </div>
 
-          {/* Bottom Row: Search */}
           <div className="relative group w-full">
             <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400 group-focus-within:text-green-500 transition-colors" size={16} />
             <input type="text" placeholder='Search "Aashirvaad Atta", "Dal", "Rice"...' value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="w-full bg-gray-100 dark:bg-[#1e1e1e] text-gray-900 dark:text-white border border-transparent dark:border-gray-800 rounded-xl py-2.5 pl-10 pr-4 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-green-500 focus:bg-white dark:focus:bg-[#151515] transition-all shadow-sm" />
@@ -531,7 +539,15 @@ export default function BlinkitStyleStorefront() {
               const rCount = product.ratingCount || 1;
               const avg = (product.ratingSum / rCount).toFixed(1);
               return (
-                <div key={product.id} onClick={() => setSelectedProduct(product)} className="min-w-[150px] max-w-[150px] bg-white dark:bg-[#161616] rounded-2xl p-3 border border-gray-100 dark:border-gray-800 shadow-sm cursor-pointer flex-shrink-0 hover:border-green-500/50 hover:-translate-y-1.5 hover:shadow-xl transition-all duration-300 group">
+                <div key={product.id} onClick={() => setSelectedProduct(product)} className="min-w-[150px] max-w-[150px] bg-white dark:bg-[#161616] rounded-2xl p-3 border border-gray-100 dark:border-gray-800 shadow-sm cursor-pointer flex-shrink-0 hover:border-green-500/50 hover:-translate-y-1.5 hover:shadow-xl transition-all duration-300 group relative">
+                  
+                  {/* OFFER BADGE TOP RATED */}
+                  {product.offerText && (
+                    <div className="absolute top-2 left-0 bg-blue-600 text-white text-[8px] font-black px-1.5 py-0.5 rounded-r-md z-20 shadow uppercase tracking-wider">
+                      {product.offerText}
+                    </div>
+                  )}
+
                   <div className="h-28 bg-gray-50 dark:bg-[#1e1e1e] rounded-xl overflow-hidden mb-2.5 relative flex items-center justify-center">
                     {product.imageUrl ? <img src={product.imageUrl} alt={product.name} className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500" /> : <span className="text-green-600 font-bold text-2xl group-hover:scale-110 transition-transform duration-300">{product.name.charAt(0)}</span>}
                     <span className="absolute bottom-1.5 right-1.5 bg-yellow-400 text-black text-[10px] font-black px-1.5 py-0.5 rounded-md flex items-center gap-0.5 shadow-md">
@@ -539,7 +555,15 @@ export default function BlinkitStyleStorefront() {
                     </span>
                   </div>
                   <h4 className="text-xs font-bold text-gray-800 dark:text-gray-200 line-clamp-1 group-hover:text-green-600 transition-colors">{product.name}</h4>
-                  <p className="text-xs font-black text-green-600 dark:text-green-500 mt-1">₹{product.price}</p>
+                  
+                  {/* DISCOUNT PRICE UI TOP RATED */}
+                  <div className="mt-1 flex items-baseline gap-1">
+                    <span className="text-xs font-black text-green-600 dark:text-green-500">₹{product.price}</span>
+                    {product.originalPrice && product.originalPrice > product.price && (
+                       <span className="text-[9px] text-gray-400 line-through font-semibold">₹{product.originalPrice}</span>
+                    )}
+                  </div>
+
                 </div>
               );
             })}
@@ -603,6 +627,13 @@ export default function BlinkitStyleStorefront() {
                 return (
                   <div key={product.id} className="group bg-white dark:bg-[#161616] rounded-3xl shadow-sm border border-gray-100 dark:border-gray-800/80 overflow-hidden flex flex-col relative transition-all duration-300 hover:shadow-2xl hover:-translate-y-1.5 hover:border-green-500/40">
                     
+                    {/* 🔴 OFFER BADGE LOGIC ON IMAGE 🔴 */}
+                    {product.offerText && (
+                      <div className="absolute top-3 left-0 bg-blue-600 text-white text-[9px] font-black px-2.5 py-1 rounded-r-lg z-20 shadow-md uppercase tracking-wider">
+                        {product.offerText}
+                      </div>
+                    )}
+
                     <button 
                       onClick={(e) => { e.stopPropagation(); toggleWishlist(product); }} 
                       className="absolute top-3 right-3 z-20 p-2.5 bg-white/90 dark:bg-black/60 backdrop-blur-md rounded-full shadow-md transition-transform active:scale-90 hover:scale-110"
@@ -626,17 +657,30 @@ export default function BlinkitStyleStorefront() {
                       <h3 onClick={() => setSelectedProduct(product)} className="text-sm font-black text-gray-800 dark:text-gray-100 line-clamp-2 leading-tight mb-1 cursor-pointer group-hover:text-green-600 dark:group-hover:text-green-400 transition-colors">{product.name}</h3>
                       <p className="text-xs text-gray-400 dark:text-gray-500 mb-4 font-bold">{product.unit}</p>
                       
-                      <div className="mt-auto flex items-center justify-between">
-                        <span className="font-black text-base text-gray-900 dark:text-white">₹{product.price}</span>
+                      {/* 🔴 DISCOUNT PRICE & PERCENTAGE UI 🔴 */}
+                      <div className="mt-auto flex items-end justify-between">
+                        <div className="flex flex-col">
+                          {product.originalPrice && product.originalPrice > product.price && (
+                            <div className="flex items-center gap-1.5 mb-0.5">
+                              <span className="text-[10px] text-gray-400 line-through font-bold">₹{product.originalPrice}</span>
+                              <span className="text-[9px] font-black text-white bg-green-600 px-1.5 py-0.5 rounded shadow-sm">
+                                {Math.round(((product.originalPrice - product.price) / product.originalPrice) * 100)}% OFF
+                              </span>
+                            </div>
+                          )}
+                          <span className="font-black text-base text-gray-900 dark:text-white leading-none">₹{product.price}</span>
+                        </div>
+
+                        {/* ADD BUTTON LOGIC */}
                         {!isOutOfStock && (
                           inCart > 0 ? (
-                            <div className="flex items-center bg-green-600 dark:bg-green-600 text-white rounded-xl shadow-md z-20 overflow-hidden animate-in zoom-in-95 duration-200">
+                            <div className="flex items-center bg-green-600 dark:bg-green-600 text-white rounded-xl shadow-md z-20 overflow-hidden animate-in zoom-in-95 duration-200 shrink-0">
                               <button onClick={() => removeFromCart(product.id)} className="p-2 hover:bg-green-700 transition-colors active:scale-90"><Minus size={14}/></button>
                               <span className="px-2.5 font-black text-sm w-7 text-center">{inCart}</span>
                               <button onClick={() => addToCart(product)} disabled={inCart >= product.stockQuantity} className="p-2 hover:bg-green-700 transition-colors disabled:opacity-50 active:scale-90"><Plus size={14}/></button>
                             </div>
                           ) : (
-                            <button onClick={() => addToCart(product)} className="border-2 border-green-600 text-green-700 bg-green-50/50 px-4 py-2 rounded-xl text-xs font-black hover:bg-green-600 hover:text-white dark:bg-transparent dark:text-green-400 dark:hover:bg-green-600 transition-all z-20 active:scale-95 shadow-sm">ADD</button>
+                            <button onClick={() => addToCart(product)} className="border-2 border-green-600 text-green-700 bg-green-50/50 px-4 py-2 rounded-xl text-xs font-black hover:bg-green-600 hover:text-white dark:bg-transparent dark:text-green-400 dark:hover:bg-green-600 transition-all z-20 active:scale-95 shadow-sm shrink-0">ADD</button>
                           )
                         )}
                       </div>
@@ -735,31 +779,51 @@ export default function BlinkitStyleStorefront() {
             </div>
           ) : (
             <div className="space-y-3">
-              {cart.map((item: any) => (
-                <div key={item.id} className="flex justify-between items-center bg-white dark:bg-[#181818] p-3.5 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm animate-in fade-in slide-in-from-right-4 duration-300">
-                  <div className="flex items-center gap-3 w-1/2">
-                    {item.imageUrl ? <img src={item.imageUrl} alt={item.name} className="w-14 h-14 rounded-xl object-cover border border-gray-100 dark:border-gray-700 bg-gray-50 dark:bg-[#1e1e1e]" /> : <div className="w-14 h-14 rounded-xl bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400 flex items-center justify-center font-bold">{item.name.charAt(0)}</div>}
-                    <div>
-                      <h4 className="font-bold text-gray-900 dark:text-white text-sm line-clamp-1 leading-tight mb-1">{item.name}</h4>
-                      <p className="text-sm font-black text-green-600 dark:text-green-500">₹{item.price}</p>
+              {cart.map((item: any) => {
+                // 🔴 NEW: DYNAMIC CART UI LOGIC FOR BOGO 🔴
+                let payableQty = item.cartQuantity;
+                if (item.offerType === "BOGO") payableQty = Math.ceil(item.cartQuantity / 2);
+                else if (item.offerType === "B2G1") payableQty = item.cartQuantity - Math.floor(item.cartQuantity / 3);
+                
+                const itemTotalPrice = payableQty * Number(item.price);
+                const freeQty = item.cartQuantity - payableQty;
+
+                return (
+                  <div key={item.id} className="flex justify-between items-center bg-white dark:bg-[#181818] p-3.5 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm animate-in fade-in slide-in-from-right-4 duration-300">
+                    <div className="flex items-center gap-3 w-1/2">
+                      {item.imageUrl ? <img src={item.imageUrl} alt={item.name} className="w-14 h-14 rounded-xl object-cover border border-gray-100 dark:border-gray-700 bg-gray-50 dark:bg-[#1e1e1e]" /> : <div className="w-14 h-14 rounded-xl bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400 flex items-center justify-center font-bold">{item.name.charAt(0)}</div>}
+                      <div className="flex flex-col">
+                        <h4 className="font-bold text-gray-900 dark:text-white text-sm line-clamp-1 leading-tight mb-1">{item.name}</h4>
+                        
+                        <div className="flex items-center gap-2">
+                          <p className="text-sm font-black text-green-600 dark:text-green-500">
+                            ₹{itemTotalPrice}
+                          </p>
+                          {freeQty > 0 && (
+                            <span className="text-[10px] bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400 font-extrabold px-1.5 py-0.5 rounded shadow-sm">
+                              {freeQty} FREE 🎉
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <div className="flex items-center bg-gray-50 dark:bg-[#121212] rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm overflow-hidden">
+                        <button onClick={() => removeFromCart(item.id)} className="p-2.5 text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-[#2a2a2a] transition active:scale-90"><Minus size={14}/></button>
+                        <span className="px-2 font-black text-gray-900 dark:text-white text-sm min-w-[28px] text-center">{item.cartQuantity}</span>
+                        <button onClick={() => addToCart(item)} disabled={item.cartQuantity >= item.stockQuantity} className="p-2.5 text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-[#2a2a2a] transition disabled:opacity-30 disabled:cursor-not-allowed active:scale-90"><Plus size={14}/></button>
+                      </div>
+                      <button 
+                        onClick={() => handleRemoveEntireItem(item)} 
+                        className="p-2.5 bg-red-50 dark:bg-red-900/20 text-red-500 hover:bg-red-100 dark:hover:bg-red-900/40 rounded-xl transition active:scale-90"
+                        title="Remove Item"
+                      >
+                        <Trash2 size={16} />
+                      </button>
                     </div>
                   </div>
-                  <div className="flex items-center gap-2 shrink-0">
-                    <div className="flex items-center bg-gray-50 dark:bg-[#121212] rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm overflow-hidden">
-                      <button onClick={() => removeFromCart(item.id)} className="p-2.5 text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-[#2a2a2a] transition active:scale-90"><Minus size={14}/></button>
-                      <span className="px-2 font-black text-gray-900 dark:text-white text-sm min-w-[28px] text-center">{item.cartQuantity}</span>
-                      <button onClick={() => addToCart(item)} disabled={item.cartQuantity >= item.stockQuantity} className="p-2.5 text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-[#2a2a2a] transition disabled:opacity-30 disabled:cursor-not-allowed active:scale-90"><Plus size={14}/></button>
-                    </div>
-                    <button 
-                      onClick={() => handleRemoveEntireItem(item)} 
-                      className="p-2.5 bg-red-50 dark:bg-red-900/20 text-red-500 hover:bg-red-100 dark:hover:bg-red-900/40 rounded-xl transition active:scale-90"
-                      title="Remove Item"
-                    >
-                      <Trash2 size={16} />
-                    </button>
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
@@ -811,8 +875,15 @@ export default function BlinkitStyleStorefront() {
       {selectedProduct && (
         <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/70 backdrop-blur-md p-4 animate-in fade-in duration-200">
           <div className="bg-white dark:bg-[#121212] w-full max-w-md rounded-3xl shadow-2xl overflow-hidden border border-gray-200 dark:border-gray-800 animate-in zoom-in-95 duration-300 relative flex flex-col max-h-[90vh]">
-            <button onClick={() => { setSelectedProduct(null); setRatingVal(0); setReviewText(""); }} className="absolute top-4 right-4 z-10 p-2.5 bg-white/90 dark:bg-black/60 backdrop-blur-md hover:bg-white dark:hover:bg-gray-800 text-gray-800 dark:text-gray-200 rounded-full shadow-lg transition-all hover:scale-110 active:scale-95"><X size={20} /></button>
+            <button onClick={() => { setSelectedProduct(null); setRatingVal(0); setReviewText(""); }} className="absolute top-4 right-4 z-50 p-2.5 bg-white/90 dark:bg-black/60 backdrop-blur-md hover:bg-white dark:hover:bg-gray-800 text-gray-800 dark:text-gray-200 rounded-full shadow-lg transition-all hover:scale-110 active:scale-95"><X size={20} /></button>
+            
             <div className="h-56 sm:h-64 bg-gray-50 dark:bg-[#1a1a1a] flex items-center justify-center overflow-hidden shrink-0 relative border-b border-gray-200 dark:border-gray-800">
+               {/* 🔴 OFFER BADGE IN MODAL 🔴 */}
+               {selectedProduct.offerText && (
+                  <div className="absolute top-4 left-0 bg-blue-600 text-white text-[10px] font-black px-3 py-1.5 rounded-r-lg z-20 shadow-md uppercase tracking-wider">
+                    {selectedProduct.offerText}
+                  </div>
+               )}
                {selectedProduct.imageUrl ? <img src={selectedProduct.imageUrl} alt={selectedProduct.name} className="w-full h-full object-cover transition-transform duration-700 hover:scale-110" /> : <span className="text-green-800 dark:text-green-500 font-bold text-8xl uppercase">{selectedProduct.name.charAt(0)}</span>}
                {selectedProduct.stockQuantity <= 0 && <div className="absolute inset-0 bg-white/70 dark:bg-black/70 flex items-center justify-center z-10 backdrop-blur-md"><span className="bg-red-600 text-white px-4 py-2 rounded-xl font-black text-sm uppercase tracking-widest shadow-xl transform -rotate-6">Out of Stock</span></div>}
             </div>
@@ -875,7 +946,20 @@ export default function BlinkitStyleStorefront() {
             </div>
 
             <div className="p-5 border-t border-gray-200 dark:border-gray-800 bg-white dark:bg-[#161616] flex items-center justify-between z-10 shadow-[0_-4px_10px_rgba(0,0,0,0.02)]">
-               <span className="text-3xl font-black text-gray-900 dark:text-white">₹{selectedProduct.price}</span>
+               
+               {/* 🔴 DISCOUNT PRICE IN MODAL BOTTOM BAR 🔴 */}
+               <div className="flex flex-col">
+                 {selectedProduct.originalPrice && selectedProduct.originalPrice > selectedProduct.price && (
+                   <div className="flex items-center gap-2 mb-0.5">
+                     <span className="text-xs text-gray-400 line-through font-bold">₹{selectedProduct.originalPrice}</span>
+                     <span className="text-[10px] font-black text-white bg-green-600 px-1.5 py-0.5 rounded shadow-sm">
+                       {Math.round(((selectedProduct.originalPrice - selectedProduct.price) / selectedProduct.originalPrice) * 100)}% OFF
+                     </span>
+                   </div>
+                 )}
+                 <span className="text-3xl font-black text-gray-900 dark:text-white leading-none">₹{selectedProduct.price}</span>
+               </div>
+
                {(() => {
                  const inCart = cart.find((item: any) => item.id === selectedProduct.id)?.cartQuantity || 0;
                  if (selectedProduct.stockQuantity <= 0) return <span className="bg-red-50 text-red-600 dark:bg-red-900/20 dark:text-red-400 px-5 py-2.5 rounded-xl font-black border border-red-200 dark:border-red-800/50 text-sm uppercase tracking-wide">Out of Stock</span>;
