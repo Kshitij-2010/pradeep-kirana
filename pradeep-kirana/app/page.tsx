@@ -416,34 +416,43 @@ export default function BlinkitStyleStorefront() {
         </div>
       )}
 
-      {/* Header */}
-      <header className="bg-white/80 dark:bg-[#121212]/80 backdrop-blur-xl p-3 sm:p-4 shadow-sm border-b dark:border-gray-800/80 sticky top-0 z-45 transition-colors duration-300">
-        <div className="max-w-4xl mx-auto">
-          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 mb-3">
-            <div className="flex items-center gap-3 hover:opacity-80 transition cursor-pointer group" onClick={() => { setActiveCategory("All"); setSearchQuery(""); }}>
-              {/* 🟢 LARGER STORE ICON (Border removed) 🟢 */}
-              <img src="/store-icon.png" alt="Pradeep Kirana" className="w-14 h-14 sm:w-16 sm:h-16 rounded-2xl shadow-lg object-cover transition-transform duration-300 group-hover:scale-105 shrink-0" />
-              <div>
-                <h1 className="text-lg sm:text-xl md:text-2xl font-black tracking-tight text-gray-900 dark:text-white leading-tight group-hover:text-green-600 dark:group-hover:text-green-500 transition-colors">Pradeep Kirana</h1>
-                <p className="text-[11px] sm:text-xs text-gray-500 dark:text-gray-400 font-medium">Genuine products, fast delivery in Unnao</p>
+      {/* Header - Optimized for Mobile */}
+      <header className="bg-white/90 dark:bg-[#121212]/90 backdrop-blur-xl px-4 py-3 shadow-sm border-b border-gray-200/50 dark:border-gray-800/80 sticky top-0 z-45 transition-colors duration-300">
+        <div className="max-w-4xl mx-auto flex flex-col gap-3">
+          
+          {/* Top Row: Logo & Profile */}
+          <div className="flex justify-between items-center">
+            <div className="flex items-center gap-2.5 hover:opacity-80 transition cursor-pointer group" onClick={() => { setActiveCategory("All"); setSearchQuery(""); }}>
+              <img src="/store-icon.png" alt="Pradeep Kirana" className="w-10 h-10 sm:w-12 sm:h-12 rounded-[14px] shadow-sm object-cover transition-transform duration-300 group-hover:scale-105 shrink-0" />
+              <div className="flex flex-col justify-center">
+                <h1 className="text-lg sm:text-xl font-black tracking-tight text-gray-900 dark:text-white leading-none group-hover:text-green-600 dark:group-hover:text-green-500 transition-colors">Pradeep Kirana</h1>
+                <p className="text-[10px] sm:text-[11px] text-gray-500 dark:text-gray-400 font-bold mt-0.5 leading-none">Genuine products, fast delivery</p>
               </div>
             </div>
-            <div className="flex items-center gap-2 w-full sm:w-auto justify-end flex-wrap">
-              <button onClick={() => setShowContactModal(true)} className="bg-gray-100 dark:bg-[#1e1e1e] hover:bg-gray-200 dark:hover:bg-[#2a2a2a] text-gray-800 dark:text-gray-200 px-3 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 border border-gray-200 dark:border-gray-700/80 shadow-sm active:scale-95"><Phone size={14} className="text-blue-500" /> Contact</button>
+
+            <div className="flex items-center gap-2 shrink-0">
+              <button onClick={() => setShowContactModal(true)} className="w-8 h-8 flex items-center justify-center bg-gray-100 dark:bg-[#1e1e1e] hover:bg-gray-200 dark:hover:bg-[#2a2a2a] rounded-full transition active:scale-95 text-gray-700 dark:text-gray-300">
+                <Phone size={15} />
+              </button>
+              
               {user ? (
                 <div className="flex items-center gap-2 bg-gray-50 dark:bg-[#1a1a1a] p-1 pr-3 rounded-full border border-gray-200 dark:border-gray-800 shadow-sm">
-                  <img src={user.photoURL} alt="Profile" className="w-8 h-8 rounded-full border-2 border-green-500 object-cover shadow-sm" />
-                  <div className="text-left"><p className="text-xs font-bold leading-tight text-gray-900 dark:text-white">{user.displayName?.split(" ")[0]}</p><button onClick={() => { signOut(auth); showToast("Logged out successfully.", "info"); }} className="text-[10px] text-red-500 font-bold hover:underline transition">Logout</button></div>
+                  <img src={user.photoURL} alt="Profile" className="w-7 h-7 rounded-full border border-green-500 object-cover shadow-sm" />
+                  <div className="text-left hidden sm:block"><p className="text-xs font-bold leading-tight text-gray-900 dark:text-white">{user.displayName?.split(" ")[0]}</p><button onClick={() => { signOut(auth); showToast("Logged out successfully.", "info"); }} className="text-[10px] text-red-500 font-bold hover:underline transition">Logout</button></div>
+                  <button onClick={() => { signOut(auth); showToast("Logged out successfully.", "info"); }} className="sm:hidden text-[10px] text-red-500 font-bold ml-1">Logout</button>
                 </div>
               ) : (
-                <button onClick={() => router.push('/login')} className="flex items-center gap-1.5 bg-gray-900 dark:bg-white text-white dark:text-gray-900 px-4 py-2 rounded-xl text-xs sm:text-sm font-extrabold shadow-md hover:scale-105 transition transform active:scale-95"><UserCircle size={16} /> Login</button>
+                <button onClick={() => router.push('/login')} className="flex items-center gap-1 bg-gray-900 dark:bg-white text-white dark:text-gray-900 px-3 py-1.5 rounded-full text-xs font-extrabold shadow-md active:scale-95"><UserCircle size={14} /> Login</button>
               )}
             </div>
           </div>
-          <div className="relative group">
-            <Search className="absolute left-3.5 top-3.5 text-gray-400 group-focus-within:text-green-500 transition-colors" size={18} />
-            <input type="text" placeholder='Search "Aashirvaad Atta", "Dal", "Rice"...' value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="w-full bg-gray-100 dark:bg-[#1e1e1e] text-gray-900 dark:text-white border border-transparent dark:border-gray-800 rounded-2xl py-3 pl-10 pr-4 text-xs sm:text-sm focus:outline-none focus:ring-2 focus:ring-green-500 focus:bg-white dark:focus:bg-[#151515] transition-all shadow-sm" />
+
+          {/* Bottom Row: Search */}
+          <div className="relative group w-full">
+            <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400 group-focus-within:text-green-500 transition-colors" size={16} />
+            <input type="text" placeholder='Search "Aashirvaad Atta", "Dal", "Rice"...' value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="w-full bg-gray-100 dark:bg-[#1e1e1e] text-gray-900 dark:text-white border border-transparent dark:border-gray-800 rounded-xl py-2.5 pl-10 pr-4 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-green-500 focus:bg-white dark:focus:bg-[#151515] transition-all shadow-sm" />
           </div>
+          
         </div>
       </header>
 
