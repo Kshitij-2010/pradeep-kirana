@@ -807,7 +807,16 @@ export default function AdminDashboard() {
                                     <p className="text-[10px] font-extrabold text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/20 px-2.5 py-1 rounded-md border border-blue-200 dark:border-blue-800/50 uppercase mt-1">
                                       💳 {order.customerDetails?.paymentMethod || order.paymentMethod || "Cash on Delivery"}
                                     </p>
-                                    {!isPickup && order.customerDetails?.mapLink && <a href={order.customerDetails.mapLink} target="_blank" rel="noreferrer" className="flex items-center gap-1 bg-blue-50 dark:bg-blue-900/20 hover:bg-blue-100 dark:hover:bg-blue-900/40 text-blue-600 dark:text-blue-400 px-3 py-1.5 rounded-lg text-sm font-bold border border-blue-200 dark:border-blue-800/50 transition mt-2"><ExternalLink size={14} /> Open Map</a>}
+                                    {!isPickup && (order.customerDetails?.lat || order.customerDetails?.mapLink) && (
+                                      <a 
+                                        href={order.customerDetails?.lat ? `https://www.google.com/maps?q=${order.customerDetails.lat},${order.customerDetails.lng}` : order.customerDetails?.mapLink} 
+                                        target="_blank" 
+                                        rel="noreferrer" 
+                                        className="flex items-center gap-1 bg-blue-50 dark:bg-blue-900/20 hover:bg-blue-100 dark:hover:bg-blue-900/40 text-blue-600 dark:text-blue-400 px-3 py-1.5 w-fit rounded-lg text-sm font-bold border border-blue-200 dark:border-blue-800/50 transition mt-2"
+                                      >
+                                        <ExternalLink size={14} /> Open Map
+                                      </a>
+                                    )}
                                   </div>
                                 </div>
                                 <div className="bg-gray-50 dark:bg-[#1a1a1a] rounded-xl p-3 border border-gray-100 dark:border-gray-800 mt-2">
