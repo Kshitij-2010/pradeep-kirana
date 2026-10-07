@@ -20,61 +20,66 @@ export default function LiveTrackingMap({ orderId, initialLat, initialLng }: Liv
   const mapRef = useRef<any>(null);
   const markerRef = useRef<any>(null);
   const [isMapLoaded, setIsMapLoaded] = useState(false);
-  const [scriptLoaded, setScriptLoaded] = useState(false);
+  const [mapError, setMapError] = useState<string | null>(null);
 
-  // 🔥 1. SCRIPT LOAD KARNA (Bina Crash Ke) 🔥
+  // 🔥 1. SCRIPT LOAD & BULLETPROOF INITIALIZATION 🔥
   useEffect(() => {
-    // Agar script pehle se hai, toh dobara load mat karo
-    if (document.getElementById('mappls-sdk-script')) {
-      setScriptLoaded(true);
-      return;
-    }
-
+    // Ye tumhari original working key hai
     const MAPPLS_STATIC_KEY = "qlaeohfcufkbsaefmopjepsodselrxdmhxgz"; 
-    const script = document.createElement('script');
-    script.id = 'mappls-sdk-script';
-    // Mappls ka official Web SDK URL
-    script.src = `https://apis.mappls.com/advancedmaps/api/${MAPPLS_STATIC_KEY}/map_sdk?layer=vector&v=3.0`;
-    script.async = true;
-    
-    script.onload = () => {
-      setScriptLoaded(true); // Script load hone ke baad signal do
+    let initAttempts = 0;
+    let isMounted = true;
+
+    // Retry function: Next.js aur Mappls ki timing mismatch fix karne ke liye
+    const checkAndInitMap = () => {
+      if (!isMounted) return;
+      const mapContainer = document.getElementById(`mappls-map-${orderId}`);
+      
+      if (window.mappls && mapContainer && !isMapLoaded) {
+        try {
+          mapRef.current = new window.mappls.Map(`mappls-map-${orderId}`, {
+            center: [initialLat || 28.6139, initialLng || 77.2090],
+            zoom: 16,
+            zoomControl: true,
+            hybrid: false
+          });
+
+          markerRef.current = new window.mappls.Marker({
+            map: mapRef.current,
+            position: { lat: initialLat || 28.6139, lng: initialLng || 77.2090 },
+          });
+          
+          setIsMapLoaded(true);
+        } catch (error) {
+          console.error("Mappls Init Error:", error);
+          setMapError("Mappls Error: Please ensure your Vercel domain is correctly whitelisted in Mappls Dashboard without trailing slashes.");
+        }
+      } else if (!isMapLoaded && initAttempts < 10) {
+         initAttempts++;
+         setTimeout(checkAndInitMap, 500); // 0.5 sec baad wapas try karega (Max 5 sec tak)
+      } else if (!isMapLoaded) {
+         setMapError("Map Load Timeout. Network weak hai ya script block ho rahi hai.");
+      }
     };
 
-    document.head.appendChild(script);
-  }, []);
-
-  // 🔥 2. MAP INITIALIZE KARNA (DOM Ready hone ke baad) 🔥
-  useEffect(() => {
-    // Jab tak script load na ho aur window.mappls na mile, tab tak ruko
-    if (!scriptLoaded || !window.mappls || isMapLoaded) return;
-
-    const mapContainerId = `mappls-map-${orderId}`;
-    const mapContainer = document.getElementById(mapContainerId);
-
-    // Ye check guarantee dega ki HTML div DOM me aa chuka hai
-    if (mapContainer) {
-      try {
-        mapRef.current = new window.mappls.Map(mapContainerId, {
-          center: [initialLat || 28.6139, initialLng || 77.2090],
-          zoom: 16,
-          zoomControl: true,
-          hybrid: false
-        });
-
-        markerRef.current = new window.mappls.Marker({
-          map: mapRef.current,
-          position: { lat: initialLat || 28.6139, lng: initialLng || 77.2090 },
-        });
-        
-        setIsMapLoaded(true);
-      } catch (error) {
-        console.error("Mappls Init Error:", error);
-      }
+    // Script injection logic
+    if (document.getElementById('mappls-sdk-script')) {
+      checkAndInitMap();
+    } else {
+      const script = document.createElement('script');
+      script.id = 'mappls-sdk-script';
+      script.src = `https://apis.mappls.com/advancedmaps/api/${MAPPLS_STATIC_KEY}/map_sdk?layer=vector&v=3.0`;
+      script.async = true;
+      script.onload = checkAndInitMap;
+      script.onerror = () => setMapError("Mappls Script Failed to Load. Please check Adblocker or Network.");
+      document.head.appendChild(script);
     }
-  }, [scriptLoaded, orderId, initialLat, initialLng, isMapLoaded]);
 
-  // 🔥 3. FIREBASE LIVE LOCATION SYNC 🔥
+    return () => {
+      isMounted = false;
+    };
+  }, [orderId, initialLat, initialLng, isMapLoaded]);
+
+  // 🔥 2. FIREBASE LIVE LOCATION SYNC 🔥
   useEffect(() => {
     if (!orderId || !isMapLoaded || !mapRef.current || !markerRef.current) return;
 
@@ -87,7 +92,7 @@ export default function LiveTrackingMap({ orderId, initialLat, initialLng }: Liv
           const newLng = data.driverLocation.lng;
 
           try {
-            // Gaadi (Marker) aur Map Camera dono ko smooth animate karo
+            // Gaadi aur Camera dono chalenge
             markerRef.current.setPosition({ lat: newLat, lng: newLng });
             mapRef.current.panTo([newLat, newLng]); 
           } catch(e) {
@@ -111,9 +116,16 @@ export default function LiveTrackingMap({ orderId, initialLat, initialLng }: Liv
         className="w-full h-[300px] sm:h-[350px] rounded-xl overflow-hidden relative shadow-inner border border-gray-200 dark:border-gray-800"
         style={{ backgroundColor: '#1a1a1a' }}
       >
-        {!isMapLoaded && (
+        {!isMapLoaded && !mapError && (
           <div className="absolute inset-0 flex items-center justify-center">
             <span className="animate-pulse text-gray-500 font-semibold">Connecting to Satellite...</span>
+          </div>
+        )}
+
+        {/* Agar error aaya, toh loading screen ki jagah reason dikhayega */}
+        {mapError && (
+          <div className="absolute inset-0 flex items-center justify-center bg-red-900/20 p-4 text-center">
+            <span className="text-red-500 font-bold text-sm">{mapError}</span>
           </div>
         )}
       </div>
