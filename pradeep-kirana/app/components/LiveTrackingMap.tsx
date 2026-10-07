@@ -3,12 +3,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { doc, onSnapshot } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
+import { mappls } from 'mappls-web-maps'; 
 
-declare global {
-  interface Window {
-    mappls: any;
-  }
-}
+// 🔥 TYPESCRIPT FIX: TS ko lagta hai mappls khali hai, isliye isko 'any' me convert kiya 🔥
+const mapplsAny = mappls as any;
 
 interface LiveTrackingMapProps {
   orderId: string;
@@ -23,66 +21,48 @@ export default function LiveTrackingMap({ orderId, initialLat, initialLng }: Liv
   const [mapError, setMapError] = useState<string | null>(null);
 
   useEffect(() => {
+    let isMounted = true;
+
     // 🔥 APNI STATIC KEY YAHAN DALO 🔥
     const MAPPLS_STATIC_KEY = "qlaeohfcufkbsaefmopjepsodselrxdmhxgz"; 
 
-    // React StrictMode me double load se bachne ke liye check
-    if (document.getElementById('mappls-sdk-script')) {
-      if (window.mappls && !isMapLoaded) {
-        initMap();
-        setIsMapLoaded(true);
-      }
-      return;
-    }
-
-    const script = document.createElement('script');
-    script.id = 'mappls-sdk-script';
-    
-    // 🔥 MAIN FIX: Naye accounts ke liye Mappls ka naya SDK URL 🔥
-    script.src = `https://sdk.mappls.com/map/sdk/web?v=3.0&access_token=${MAPPLS_STATIC_KEY}`;
-    script.async = true;
-    
-    script.onload = () => {
-      initMap();
-      setIsMapLoaded(true);
-    };
-    
-    script.onerror = () => {
-      setMapError("Failed to load map. Please check your Static Key.");
-    };
-
-    document.head.appendChild(script);
-
-    return () => {
-      // Unmount par script remove nahi karenge taki wapas aane par fast load ho
-    };
-  }, []);
-
-  const initMap = () => {
-    if (!window.mappls) return;
-
-    // Timeout isliye taaki UI render hone ka wait kare aur map container mil jaye
-    setTimeout(() => {
-      const mapContainer = document.getElementById(`mappls-map-${orderId}`);
-      if (!mapContainer) return;
-
+    // Yahan mapplsAny use karenge taaki TS laal line na de
+    mapplsAny.initialize(MAPPLS_STATIC_KEY, () => {
+      if (!isMounted) return;
+      
       try {
-        mapRef.current = new window.mappls.Map(`mappls-map-${orderId}`, {
-          center: { lat: initialLat || 28.6139, lng: initialLng || 77.2090 },
+        const mapObject = new mapplsAny.Map(`mappls-map-${orderId}`, {
+          center: [initialLat || 28.6139, initialLng || 77.2090],
           zoom: 16,
           zoomControl: true,
           hybrid: false
         });
 
-        markerRef.current = new window.mappls.Marker({
-          map: mapRef.current,
-          position: { lat: initialLat || 28.6139, lng: initialLng || 77.2090 },
+        mapObject.addListener('load', () => {
+          if (!isMounted) return;
+          
+          mapRef.current = mapObject;
+          markerRef.current = new mapplsAny.Marker({
+            map: mapObject,
+            position: { lat: initialLat || 28.6139, lng: initialLng || 77.2090 },
+          });
+          
+          setIsMapLoaded(true);
         });
-      } catch (err) {
-        console.error("Mappls Init Error:", err);
+
+      } catch (error) {
+        console.error("Mappls Init Error:", error);
+        if (isMounted) setMapError("Map initialization failed. Please check your credentials.");
       }
-    }, 200);
-  };
+    });
+
+    return () => {
+      isMounted = false;
+      if (mapRef.current && typeof mapRef.current.destroy === 'function') {
+         mapRef.current.destroy();
+      }
+    };
+  }, [orderId, initialLat, initialLng]);
 
   // 🔥 FIREBASE LIVE LOCATION SYNC 🔥
   useEffect(() => {
@@ -96,14 +76,11 @@ export default function LiveTrackingMap({ orderId, initialLat, initialLng }: Liv
           const newLat = data.driverLocation.lat;
           const newLng = data.driverLocation.lng;
 
-          // Gaadi (Marker) ko smooth move karna
-          markerRef.current.setPosition({ lat: newLat, lng: newLng });
-          
-          // Map ka camera driver ke sath-sath chalana
-          if (typeof mapRef.current.panTo === 'function') {
-             mapRef.current.panTo({ lat: newLat, lng: newLng });
-          } else {
-             mapRef.current.setCenter({ lat: newLat, lng: newLng });
+          try {
+            markerRef.current.setPosition({ lat: newLat, lng: newLng });
+            mapRef.current.panTo({ lat: newLat, lng: newLng });
+          } catch(e) {
+             console.error("Error moving map/marker:", e);
           }
         }
       }
