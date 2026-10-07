@@ -5,8 +5,11 @@ import { collection, query, where, orderBy, onSnapshot, doc, updateDoc, getDoc }
 import { onAuthStateChanged } from "firebase/auth";
 import { db, auth } from "@/lib/firebase";
 import { useRouter } from "next/navigation";
-import { Package, Clock, CheckCircle, Bike, Store, ArrowLeft, ChevronRight, Tag, Truck, X, CheckCircle2, RotateCcw, AlertTriangle, Calendar } from "lucide-react";
+import { Package, Clock, CheckCircle, Bike, Store, ArrowLeft, ChevronRight, Tag, Truck, X, CheckCircle2, RotateCcw, AlertTriangle, Calendar, MapPin } from "lucide-react";
 import { useCart } from "@/context/CartContext";
+
+// 🔥 MAP COMPONENT IMPORT 🔥
+import LiveTrackingMap from "@/app/components/LiveTrackingMap";
 
 // Modern & Soothing Success Notification Sound
 const playNotificationSound = () => {
@@ -68,7 +71,6 @@ export default function OrdersPage() {
   const [loading, setLoading] = useState(true);
   const [orderingId, setOrderingId] = useState<string | null>(null);
   
-  // Custom UI Toast Notification State (Replaces ugly browser alerts)
   const [toast, setToast] = useState<{ show: boolean, message: string, type: 'success' | 'error' }>({ show: false, message: "", type: 'success' });
   
   const router = useRouter();
@@ -113,7 +115,6 @@ export default function OrdersPage() {
     }
   };
 
-  // Robust Live-Stock Checked Order Again Function with Toast UI
   const handleOrderAgain = async (items: any[], orderId: string) => {
     if (!items || items.length === 0) return;
     setOrderingId(orderId);
@@ -224,6 +225,9 @@ export default function OrdersPage() {
                 : ["Pending", "Accepted", "On the Way", "Delivered"];
 
               const needsConfirmation = (order.status === "Awaiting Confirmation" || order.status === "Awaiting Pickup Confirmation");
+              
+              // Map sirf tab dikhega jab order accept ho gaya ho aur deliver na hua ho
+              const showLiveMap = isDelivery && !isCancelled && (order.status === "Accepted" || order.status === "Out for Delivery" || order.status === "On the Way" || order.status === "Awaiting Confirmation");
 
               return (
                 <div key={order.id} className="bg-white dark:bg-[#121212] rounded-2xl shadow-sm border border-gray-200 dark:border-gray-800 overflow-hidden transition-colors">
@@ -241,7 +245,6 @@ export default function OrdersPage() {
                               {isPickup ? <Store size={12}/> : <Truck size={12}/>} {isPickup ? 'PICKUP' : 'DELIVERY'}
                             </span>
                             
-                            {/* 🔴 "Waiting for delivery partner" notification badge 🔴 */}
                             {order.status === "Pending" && isDelivery && (
                               <span className="text-yellow-600 dark:text-yellow-400 text-[11px] font-bold animate-pulse flex items-center gap-1 bg-yellow-100 dark:bg-yellow-900/20 px-2.5 py-1 rounded-md border border-yellow-200 dark:border-yellow-800/30 shrink-0">
                                 <Clock size={12} /> Waiting for a delivery partner to accept...
@@ -257,20 +260,18 @@ export default function OrdersPage() {
                     </div>
                   </div>
 
-                  {/* ================= LIVE TRACKING PROGRESS BAR ================= */}
+                  {/* ================= PROGRESS BAR ================= */}
                   <div className="p-6 border-b border-gray-100 dark:border-gray-800">
                     {isCancelled ? (
                       <div className="bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 p-4 rounded-xl flex flex-col items-center justify-center gap-1.5 font-bold border border-red-100 dark:border-red-800/30 text-center">
                         <div className="flex items-center gap-2">
                           <X size={20} /> Order Cancelled
                         </div>
-                        {order.cancellationReason && (
+                        {order.cancellationReason ? (
                           <p className="text-xs font-medium text-red-500 dark:text-red-300 mt-1 bg-red-100/50 dark:bg-red-900/40 px-3 py-1.5 rounded-lg border border-red-200 dark:border-red-800/40">
                             Reason: {order.cancellationReason}
                           </p>
-                        )}
-                        {/* Auto-cancel fallback reason in UI if DB missing reason field but status is Cancelled */}
-                        {!order.cancellationReason && (
+                        ) : (
                            <p className="text-xs font-medium text-red-500 dark:text-red-300 mt-1 bg-red-100/50 dark:bg-red-900/40 px-3 py-1.5 rounded-lg border border-red-200 dark:border-red-800/40">
                             Reason: Auto-Cancelled (No partner found within 10 minutes)
                            </p>
@@ -304,6 +305,17 @@ export default function OrdersPage() {
                     )}
                   </div>
 
+                  {/* ================= LIVE MAP INTEGRATION ================= */}
+                  {showLiveMap && (
+                    <div className="px-5 pb-5 border-b border-gray-100 dark:border-gray-800 bg-gray-50/30 dark:bg-[#181818]/30">
+                      <LiveTrackingMap 
+                        orderId={order.id} 
+                        initialLat={order.customerDetails?.lat || 26.548382} // Unnao fallback
+                        initialLng={order.customerDetails?.lng || 80.478238} 
+                      />
+                    </div>
+                  )}
+
                   {/* ================= CUSTOMER RECEIPT CONFIRMATION BOX ================= */}
                   {needsConfirmation && (
                     <div className="mx-6 mt-4 p-4 bg-gradient-to-r from-green-600 to-emerald-700 text-white rounded-2xl shadow-md flex flex-col sm:flex-row items-center justify-between gap-3">
@@ -321,6 +333,7 @@ export default function OrdersPage() {
                     </div>
                   )}
 
+                  {/* ================= ITEMS ORDERED ================= */}
                   <div className="p-5">
                     <p className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3">Items Ordered</p>
                     <div className="space-y-2">
@@ -388,4 +401,3 @@ export default function OrdersPage() {
     </div>
   );
 }
-// test comment for git
