@@ -7,9 +7,17 @@ import { db, auth } from "@/lib/firebase";
 import { useRouter } from "next/navigation";
 import { Package, Clock, CheckCircle, Bike, Store, ArrowLeft, ChevronRight, Tag, Truck, X, CheckCircle2, RotateCcw, AlertTriangle, Calendar, MapPin } from "lucide-react";
 import { useCart } from "@/context/CartContext";
+import dynamic from 'next/dynamic';
 
-// 🔥 MAP COMPONENT IMPORT 🔥
-import LiveTrackingMap from "@/app/components/LiveTrackingMap";
+// 🔥 NAYA: SSR: false ensures map sirf browser me load ho, server par nahi (PREVENTS CRASH)
+const LiveTrackingMap = dynamic(() => import('@/app/components/LiveTrackingMap'), { 
+  ssr: false,
+  loading: () => (
+    <div className="w-full h-[300px] sm:h-[350px] flex items-center justify-center bg-gray-100 dark:bg-[#1a1a1a] rounded-xl border border-gray-200 dark:border-gray-800 mt-2">
+      <span className="animate-pulse text-gray-500 font-semibold">Loading Map Engine...</span>
+    </div>
+  )
+});
 
 // Modern & Soothing Success Notification Sound
 const playNotificationSound = () => {
@@ -30,13 +38,13 @@ const playNotificationSound = () => {
       osc.start(ctx.currentTime + start);
       osc.stop(ctx.currentTime + start + duration);
     };
-    playTone(523.25, 'sine', 0, 0.4);    // C5
-    playTone(659.25, 'sine', 0.1, 0.5);  // E5
-    playTone(783.99, 'sine', 0.2, 0.6);  // G5
+    playTone(523.25, 'sine', 0, 0.4);
+    playTone(659.25, 'sine', 0.1, 0.5);
+    playTone(783.99, 'sine', 0.2, 0.6);
   } catch (e) { console.error(e); }
 };
 
-// Soft Error/Alert Sound (For Out of Stock)
+// Soft Error/Alert Sound
 const playAlertSound = () => {
   try {
     const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
@@ -55,8 +63,8 @@ const playAlertSound = () => {
       osc.start(ctx.currentTime + start);
       osc.stop(ctx.currentTime + start + duration);
     };
-    playTone(349.23, 'triangle', 0, 0.4);    // F4
-    playTone(311.13, 'triangle', 0.15, 0.5); // Eb4
+    playTone(349.23, 'triangle', 0, 0.4);
+    playTone(311.13, 'triangle', 0.15, 0.5);
   } catch (e) { console.error(e); }
 };
 
@@ -199,7 +207,6 @@ export default function OrdersPage() {
       )}
 
       <div className="max-w-3xl mx-auto">
-        
         <header className="flex items-center gap-4 mb-6">
           <button onClick={() => router.push('/')} className="p-2 bg-white dark:bg-[#1a1a1a] border border-gray-200 dark:border-gray-800 rounded-full shadow-sm hover:bg-gray-100 dark:hover:bg-[#2a2a2a] transition"><ArrowLeft className="text-gray-800 dark:text-gray-200" size={20} /></button>
           <h1 className="text-2xl font-extrabold text-gray-900 dark:text-white">My Orders</h1>
@@ -225,8 +232,6 @@ export default function OrdersPage() {
                 : ["Pending", "Accepted", "On the Way", "Delivered"];
 
               const needsConfirmation = (order.status === "Awaiting Confirmation" || order.status === "Awaiting Pickup Confirmation");
-              
-              // Map sirf tab dikhega jab order accept ho gaya ho aur deliver na hua ho
               const showLiveMap = isDelivery && !isCancelled && (order.status === "Accepted" || order.status === "Out for Delivery" || order.status === "On the Way" || order.status === "Awaiting Confirmation");
 
               return (
@@ -310,7 +315,7 @@ export default function OrdersPage() {
                     <div className="px-5 pb-5 border-b border-gray-100 dark:border-gray-800 bg-gray-50/30 dark:bg-[#181818]/30">
                       <LiveTrackingMap 
                         orderId={order.id} 
-                        initialLat={order.customerDetails?.lat || 26.548382} // Unnao fallback
+                        initialLat={order.customerDetails?.lat || 26.548382} 
                         initialLng={order.customerDetails?.lng || 80.478238} 
                       />
                     </div>
