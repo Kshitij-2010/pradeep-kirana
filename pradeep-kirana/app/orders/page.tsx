@@ -1,15 +1,15 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { collection, query, where, orderBy, onSnapshot, doc, updateDoc, getDoc } from "firebase/firestore";
+import { collection, query, where, orderBy, onSnapshot, doc, updateDoc, getDoc, getDocs } from "firebase/firestore";
 import { onAuthStateChanged } from "firebase/auth";
 import { db, auth } from "@/lib/firebase";
 import { useRouter } from "next/navigation";
-import { Package, Clock, CheckCircle, Bike, Store, ArrowLeft, ChevronRight, Tag, Truck, X, CheckCircle2, RotateCcw, AlertTriangle, Calendar, MapPin } from "lucide-react";
+import { Package, Clock, CheckCircle, Bike, Store, ArrowLeft, ChevronRight, Tag, Truck, X, CheckCircle2, RotateCcw, AlertTriangle, Calendar, MapPin, PhoneCall } from "lucide-react";
 import { useCart } from "@/context/CartContext";
 import dynamic from 'next/dynamic';
 
-// 🔥 NAYA: SSR: false ensures map sirf browser me load ho, server par nahi (PREVENTS CRASH)
+// 🔥 SSR: false ensures map sirf browser me load ho, server par nahi
 const LiveTrackingMap = dynamic(() => import('@/app/components/LiveTrackingMap'), { 
   ssr: false,
   loading: () => (
@@ -74,6 +74,16 @@ const formatDate = (dateObj: any) => {
   return new Date(dateObj).toLocaleString('en-IN');
 };
 
+// 🔥 HAVERSINE FORMULA FOR ETA CALCULATION 🔥
+const getDistance = (lat1: number, lon1: number, lat2: number, lon2: number) => {
+  if (!lat1 || !lon1 || !lat2 || !lon2) return 0;
+  const R = 6371000;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLng = (lon2 - lon1) * Math.PI / 180;
+  const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLng / 2) * Math.sin(dLng / 2);
+  return R * (2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)));
+};
+
 export default function OrdersPage() {
   const [orders, setOrders] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -107,6 +117,60 @@ export default function OrdersPage() {
     });
     return () => unsubscribe();
   }, [router]);
+
+  // 🔥 DRIVER ACCEPT ORDER FUNCTION (UID/Email Based Verification) 🔥
+  const handleDriverAcceptOrder = async (orderId: string) => {
+    const currentUser = auth.currentUser;
+    if (!currentUser) {
+      showToast("Please login as a delivery partner first.", "error");
+      return;
+    }
+
+    try {
+      // 1. Check if the user exists in 'deliveryPartners' collection using UID or Email
+      let driverData: any = null;
+      let driverId = currentUser.uid;
+
+      const directDriverRef = doc(db, "deliveryPartners", driverId);
+      const directSnap = await getDoc(directDriverRef);
+
+      if (directSnap.exists()) {
+        driverData = directSnap.data();
+      } else {
+        // Fallback: Query by email if UID doesn't match directly
+        const q = query(collection(db, "deliveryPartners"), where("authInfo.customEmail", "==", currentUser.email));
+        const querySnap = await getDocs(q);
+        if (!querySnap.empty) {
+          driverData = querySnap.docs[0].data();
+          driverId = querySnap.docs[0].id;
+        }
+      }
+
+      if (!driverData) {
+        showToast("Access Denied: You are not registered as an official delivery partner.", "error");
+        return;
+      }
+
+      // 2. Update the order with verified driver details
+      playNotificationSound();
+      await updateDoc(doc(db, "orders", orderId), {
+        status: "Accepted",
+        driverId: driverId,
+        driver: {
+          name: driverData.personalInfo?.name || "Delivery Partner",
+          phone: driverData.personalInfo?.phone || "",
+          vehicleNumber: driverData.vehicleInfo?.registrationNumber || "Assigned",
+          photoUrl: driverData.personalInfo?.photoUrl || "https://cdn-icons-png.flaticon.com/512/4140/4140048.png"
+        },
+        driverLocation: driverData.liveTracking?.currentLocation || { lat: 26.546071, lng: 80.486092 }
+      });
+
+      showToast("Order accepted successfully! Live tracking initiated 🚀", "success");
+    } catch (error) {
+      console.error("Error accepting order:", error);
+      showToast("Order accept karne me error aayi, dobara try karein.", "error");
+    }
+  };
 
   const handleConfirmReceipt = async (orderId: string, orderType: string) => {
     const newStatus = orderType === "Pickup" ? "Picked Up" : "Delivered";
@@ -186,7 +250,7 @@ export default function OrdersPage() {
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-[#0a0a0a] p-4 md:p-8 transition-colors relative">
       
-      {/* ================= MODERN UI TOAST NOTIFICATION BANNER ================= */}
+      {/* ================= TOAST NOTIFICATION BANNER ================= */}
       {toast.show && (
         <div className={`fixed top-5 left-1/2 transform -translate-x-1/2 z-[100] w-11/12 max-w-md p-4 rounded-2xl shadow-2xl flex items-center justify-between border animate-in slide-in-from-top-5 duration-300 ${
           toast.type === 'success' 
@@ -233,11 +297,24 @@ export default function OrdersPage() {
 
               const needsConfirmation = (order.status === "Awaiting Confirmation" || order.status === "Awaiting Pickup Confirmation");
               const showLiveMap = isDelivery && !isCancelled && (order.status === "Accepted" || order.status === "Out for Delivery" || order.status === "On the Way" || order.status === "Awaiting Confirmation");
+              
+              let liveETA = 0;
+              if (order.driverLocation && order.customerDetails?.lat) {
+                const dist = getDistance(order.driverLocation.lat, order.driverLocation.lng, order.customerDetails.lat, order.customerDetails.lng);
+                liveETA = Math.max(1, Math.ceil(dist / 400));
+              }
+
+              const driver = order.driver || {
+                name: "Delivery Partner",
+                phone: "",
+                vehicleNumber: "Assigning...",
+                photoUrl: "https://cdn-icons-png.flaticon.com/512/4140/4140048.png"
+              };
 
               return (
                 <div key={order.id} className="bg-white dark:bg-[#121212] rounded-2xl shadow-sm border border-gray-200 dark:border-gray-800 overflow-hidden transition-colors">
                   
-                  {/* ================= ORDER CARD HEADER ================= */}
+                  {/* ================= ORDER HEADER ================= */}
                   <div className="p-5 border-b border-gray-100 dark:border-gray-800 bg-gray-50/50 dark:bg-[#1e1e1e]/50">
                     <div className="flex justify-between items-start mb-2">
                       <div>
@@ -251,9 +328,18 @@ export default function OrdersPage() {
                             </span>
                             
                             {order.status === "Pending" && isDelivery && (
-                              <span className="text-yellow-600 dark:text-yellow-400 text-[11px] font-bold animate-pulse flex items-center gap-1 bg-yellow-100 dark:bg-yellow-900/20 px-2.5 py-1 rounded-md border border-yellow-200 dark:border-yellow-800/30 shrink-0">
-                                <Clock size={12} /> Waiting for a delivery partner to accept...
-                              </span>
+                              <div className="flex items-center gap-2">
+                                <span className="text-yellow-600 dark:text-yellow-400 text-[11px] font-bold animate-pulse flex items-center gap-1 bg-yellow-100 dark:bg-yellow-900/20 px-2.5 py-1 rounded-md border border-yellow-200 dark:border-yellow-800/30 shrink-0">
+                                  <Clock size={12} /> Waiting for partner...
+                                </span>
+                                {/* Test/Quick Accept button for Driver testing */}
+                                <button 
+                                  onClick={() => handleDriverAcceptOrder(order.id)}
+                                  className="bg-green-600 hover:bg-green-700 text-white text-[10px] font-extrabold px-2.5 py-1 rounded-md transition shadow"
+                                >
+                                  Accept Order 🛵
+                                </button>
+                              </div>
                             )}
                           </div>
                         </div>
@@ -269,18 +355,10 @@ export default function OrdersPage() {
                   <div className="p-6 border-b border-gray-100 dark:border-gray-800">
                     {isCancelled ? (
                       <div className="bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 p-4 rounded-xl flex flex-col items-center justify-center gap-1.5 font-bold border border-red-100 dark:border-red-800/30 text-center">
-                        <div className="flex items-center gap-2">
-                          <X size={20} /> Order Cancelled
-                        </div>
-                        {order.cancellationReason ? (
-                          <p className="text-xs font-medium text-red-500 dark:text-red-300 mt-1 bg-red-100/50 dark:bg-red-900/40 px-3 py-1.5 rounded-lg border border-red-200 dark:border-red-800/40">
-                            Reason: {order.cancellationReason}
-                          </p>
-                        ) : (
-                           <p className="text-xs font-medium text-red-500 dark:text-red-300 mt-1 bg-red-100/50 dark:bg-red-900/40 px-3 py-1.5 rounded-lg border border-red-200 dark:border-red-800/40">
-                            Reason: Auto-Cancelled (No partner found within 10 minutes)
-                           </p>
-                        )}
+                        <div className="flex items-center gap-2"><X size={20} /> Order Cancelled</div>
+                        <p className="text-xs font-medium text-red-500 dark:text-red-300 mt-1 bg-red-100/50 dark:bg-red-900/40 px-3 py-1.5 rounded-lg border border-red-200 dark:border-red-800/40">
+                          Reason: {order.cancellationReason || "Auto-Cancelled (No partner found)"}
+                        </p>
                       </div>
                     ) : (
                       <div className="relative">
@@ -310,18 +388,54 @@ export default function OrdersPage() {
                     )}
                   </div>
 
-                  {/* ================= LIVE MAP INTEGRATION ================= */}
+                  {/* ================= LIVE DASHBOARD (ETA + MAP + DRIVER) ================= */}
                   {showLiveMap && (
-                    <div className="px-5 pb-5 border-b border-gray-100 dark:border-gray-800 bg-gray-50/30 dark:bg-[#181818]/30">
+                    <div className="px-5 pb-5 border-b border-gray-100 dark:border-gray-800 bg-gray-50/50 dark:bg-[#181818]/50">
+                      
+                      <div className="mt-4 mb-4 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800/30 rounded-xl p-4 flex items-center justify-between shadow-sm">
+                        <div>
+                          <h3 className="text-xl font-extrabold text-green-700 dark:text-green-400">
+                            {order.driverLocation ? `${liveETA} mins` : "Locating..."}
+                          </h3>
+                          <p className="text-xs font-bold text-green-600/80 dark:text-green-400/80 uppercase tracking-wider">Estimated Arrival</p>
+                        </div>
+                        <div className="w-10 h-10 bg-green-100 dark:bg-green-800/40 rounded-full flex items-center justify-center">
+                          <Clock className="text-green-600 dark:text-green-400" size={20} />
+                        </div>
+                      </div>
+
                       <LiveTrackingMap 
                         orderId={order.id} 
                         initialLat={order.customerDetails?.lat || 26.548382} 
                         initialLng={order.customerDetails?.lng || 80.478238} 
                       />
+
+                      <div className="mt-4 bg-white dark:bg-[#1a1a1a] border border-gray-200 dark:border-gray-700/50 rounded-xl p-4 flex items-center justify-between shadow-sm">
+                        <div className="flex items-center gap-3 sm:gap-4">
+                          <div className="w-12 h-12 bg-gray-100 dark:bg-gray-800 rounded-full border border-gray-200 dark:border-gray-700 overflow-hidden flex-shrink-0">
+                            <img src={driver.photoUrl} alt="Driver" className="w-full h-full object-cover" />
+                          </div>
+                          <div>
+                            <h4 className="font-bold text-gray-900 dark:text-gray-100 text-sm sm:text-base">{driver.name}</h4>
+                            <div className="flex items-center gap-2 mt-0.5">
+                              <span className="bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 text-[10px] sm:text-xs px-2 py-0.5 rounded font-mono border border-gray-200 dark:border-gray-700">
+                                {driver.vehicleNumber}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                        
+                        {driver.phone && (
+                          <a href={`tel:${driver.phone}`} className="w-10 h-10 bg-green-500 hover:bg-green-600 text-white rounded-full flex items-center justify-center transition-colors shadow-md shrink-0">
+                            <PhoneCall size={18} fill="currentColor" />
+                          </a>
+                        )}
+                      </div>
+
                     </div>
                   )}
 
-                  {/* ================= CUSTOMER RECEIPT CONFIRMATION BOX ================= */}
+                  {/* ================= CONFIRMATION BOX ================= */}
                   {needsConfirmation && (
                     <div className="mx-6 mt-4 p-4 bg-gradient-to-r from-green-600 to-emerald-700 text-white rounded-2xl shadow-md flex flex-col sm:flex-row items-center justify-between gap-3">
                       <div>
@@ -338,46 +452,63 @@ export default function OrdersPage() {
                     </div>
                   )}
 
-                  {/* ================= ITEMS ORDERED ================= */}
+                  {/* ================= ITEMS & INVOICE ================= */}
                   <div className="p-5">
-                    <p className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3">Items Ordered</p>
-                    <div className="space-y-2">
+                    <p className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3">Order Summary</p>
+                    <div className="space-y-3">
                       {order.items?.map((item: any, idx: number) => (
-                        <div key={idx} className="flex justify-between items-center text-sm">
-                          <div className="flex items-center gap-2">
-                            <span className="bg-gray-100 dark:bg-[#1a1a1a] text-gray-800 dark:text-gray-300 font-bold px-2 py-0.5 rounded text-xs">{item.cartQuantity}x</span>
-                            <span className="font-semibold text-gray-700 dark:text-gray-200">{item.name}</span>
+                        <div key={idx} className="flex justify-between items-start text-sm">
+                          <div className="flex gap-3">
+                            <div className="w-6 h-6 bg-gray-100 dark:bg-gray-800 rounded flex items-center justify-center text-xs font-bold text-gray-600 dark:text-gray-400 border border-gray-200 dark:border-gray-700 shrink-0">
+                              {item.cartQuantity}x
+                            </div>
+                            <span className="font-semibold text-gray-700 dark:text-gray-200 pt-0.5">{item.name}</span>
                           </div>
-                          <span className="text-gray-500 dark:text-gray-400 font-medium">₹{item.price * item.cartQuantity}</span>
+                          <span className="text-gray-600 dark:text-gray-400 font-bold pt-0.5">₹{item.price * item.cartQuantity}</span>
                         </div>
                       ))}
                     </div>
 
-                    <div className="mt-4 pt-4 border-t border-gray-100 dark:border-gray-800 space-y-1.5 text-sm">
-                      <div className="flex justify-between text-gray-500 dark:text-gray-400"><span>Item Total</span><span>₹{order.cartTotal || order.totalAmount}</span></div>
-                      
-                      {order.deliveryFee !== undefined && (
-                        <div className="flex justify-between text-gray-500 dark:text-gray-400">
-                          <span>Delivery Fee</span>
-                          <span>{order.deliveryFee === 0 ? "FREE" : `₹${order.deliveryFee}`}</span>
-                        </div>
-                      )}
-                      {order.discount > 0 && (
-                        <div className="flex justify-between text-green-600 dark:text-green-500 font-bold">
-                          <span>Discount ({order.promoCodeUsed})</span>
-                          <span>-₹{order.discount}</span>
-                        </div>
-                      )}
-                      
-                      <div className="flex justify-between font-black text-lg text-gray-900 dark:text-white pt-2">
-                        <span>Total Paid</span>
-                        <span className="text-green-600">₹{order.totalAmount}</span>
-                      </div>
+                    <div className="border-t border-gray-200 dark:border-gray-800 border-dashed my-4"></div>
+
+                    <div className="space-y-2 text-sm">
+                      <div className="flex justify-between text-gray-500 dark:text-gray-400 font-medium"><span>Item Total</span><span>₹{order.cartTotal || order.totalAmount}</span></div>
+                      {order.deliveryFee !== undefined && (<div className="flex justify-between text-gray-500 dark:text-gray-400 font-medium"><span>Delivery Fee</span><span>{order.deliveryFee === 0 ? "FREE" : `₹${order.deliveryFee}`}</span></div>)}
+                      {order.discount > 0 && (<div className="flex justify-between text-green-600 dark:text-green-500 font-bold"><span>Discount</span><span>-₹{order.discount}</span></div>)}
                     </div>
+                    
+                    <div className="border-t border-gray-200 dark:border-gray-800 my-4"></div>
+
+                    <div className="flex justify-between items-center pt-1">
+                      <span className="font-black text-lg text-gray-900 dark:text-white">Grand Total</span>
+                      <span className="font-black text-xl text-green-600 dark:text-green-500">₹{order.totalAmount}</span>
+                    </div>
+
+                    {/* Dynamic Payment Method Tag */}
+                    {(() => {
+                      const paymentMethod = order.customerDetails?.paymentMethod || order.paymentMethod || "Online";
+                      const isCOD = paymentMethod.toLowerCase().includes("cash") || paymentMethod === "COD";
+
+                      return isCOD ? (
+                        <div className="mt-4 bg-orange-50 dark:bg-orange-900/20 rounded-lg p-3 flex items-center gap-2 border border-orange-200 dark:border-orange-800/30 inline-flex">
+                          <div className="w-2 h-2 bg-orange-500 rounded-full animate-pulse"></div>
+                          <span className="text-[10px] sm:text-xs text-orange-700 dark:text-orange-400 font-bold tracking-wide uppercase">
+                            To Pay: Cash on Delivery
+                          </span>
+                        </div>
+                      ) : (
+                        <div className="mt-4 bg-gray-100 dark:bg-gray-800/50 rounded-lg p-3 flex items-center gap-2 border border-gray-200 dark:border-gray-700/50 inline-flex">
+                          <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
+                          <span className="text-[10px] sm:text-xs text-gray-600 dark:text-gray-300 font-bold tracking-wide uppercase">
+                            Paid via Online Mode
+                          </span>
+                        </div>
+                      );
+                    })()}
                   </div>
                   
-                  {/* ================= ORDER AGAIN BUTTON ================= */}
-                  <div className="p-5 border-t border-gray-100 dark:border-gray-800 flex justify-end">
+                  {/* ================= ORDER AGAIN ================= */}
+                  <div className="p-5 border-t border-gray-100 dark:border-gray-800 flex justify-end bg-gray-50/50 dark:bg-[#1a1a1a]/30">
                     <button 
                       onClick={() => handleOrderAgain(order.items, order.id)}
                       disabled={orderingId === order.id}
