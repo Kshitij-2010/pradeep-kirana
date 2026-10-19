@@ -74,12 +74,13 @@ export default function AdminDashboard() {
   const [cancellingOrderId, setCancellingOrderId] = useState<string | null>(null);
   const [cancellationReason, setCancellationReason] = useState("");
 
-  const [activeTab, setActiveTab] = useState<"orders" | "inventory" | "customers" | "reviews" | "coupons" | "offers" | "settings">("orders");
+  const [activeTab, setActiveTab] = useState<"orders" | "inventory" | "customers" | "reviews" | "coupons" | "offers" | "partners" | "settings">("orders");
   const [orders, setOrders] = useState<any[]>([]);
   const [products, setProducts] = useState<any[]>([]);
   const [reviews, setReviews] = useState<any[]>([]);
   const [coupons, setCoupons] = useState<any[]>([]);
   const [offers, setOffers] = useState<any[]>([]);
+  const [partners, setPartners] = useState<any[]>([]); // 🔴 NEW: Partners State
   const [loading, setLoading] = useState(true);
   
   const [viewedReviewIds, setViewedReviewIds] = useState<Set<string>>(new Set());
@@ -219,6 +220,13 @@ export default function AdminDashboard() {
       const offData: any[] = [];
       snapshot.forEach((doc) => { offData.push({ id: doc.id, ...doc.data() }); });
       setOffers(offData);
+    });
+
+    // 🔴 NEW: Fetch Delivery Partners
+    const unsubPartners = onSnapshot(query(collection(db, "delivery")), (snapshot) => {
+      const partnerData: any[] = [];
+      snapshot.forEach((doc) => { partnerData.push({ id: doc.id, ...doc.data() }); });
+      setPartners(partnerData);
       setLoading(false);
     });
 
@@ -240,7 +248,7 @@ export default function AdminDashboard() {
       }
     });
 
-    return () => { unsubOrders(); unsubProducts(); unsubReviews(); unsubCoupons(); unsubOffers(); unsubStoreStatus(); unsubDeliveryConfig(); };
+    return () => { unsubOrders(); unsubProducts(); unsubReviews(); unsubCoupons(); unsubOffers(); unsubPartners(); unsubStoreStatus(); unsubDeliveryConfig(); };
   }, [isAuthenticated]);
 
   // ================= LEGACY READ-ONLY GLITCH SCANNER =================
@@ -753,10 +761,11 @@ export default function AdminDashboard() {
           <button onClick={() => setActiveTab("inventory")} className={`shrink-0 flex items-center justify-center gap-2 px-4 py-2.5 md:py-3 rounded-xl text-sm font-bold transition ${activeTab === "inventory" ? "bg-green-50 dark:bg-green-900/30 text-green-700 dark:text-green-400 border border-green-200 dark:border-green-800/50" : "text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-[#1a1a1a]"}`}><Box size={18} /> Inventory</button>
           <button onClick={() => setActiveTab("customers")} className={`shrink-0 flex items-center justify-center gap-2 px-4 py-2.5 md:py-3 rounded-xl text-sm font-bold transition ${activeTab === "customers" ? "bg-green-50 dark:bg-green-900/30 text-green-700 dark:text-green-400 border border-green-200 dark:border-green-800/50" : "text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-[#1a1a1a]"}`}><Users size={18} /> Customers</button>
           <button onClick={() => setActiveTab("coupons")} className={`shrink-0 flex items-center justify-center gap-2 px-4 py-2.5 md:py-3 rounded-xl text-sm font-bold transition ${activeTab === "coupons" ? "bg-green-50 dark:bg-green-900/30 text-green-700 dark:text-green-400 border border-green-200 dark:border-green-800/50" : "text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-[#1a1a1a]"}`}><Tag size={18} /> Coupons</button>
-          {/* 🔴 NEW OFFERS TAB 🔴 */}
           <button onClick={() => setActiveTab("offers")} className={`shrink-0 flex items-center justify-center gap-2 px-4 py-2.5 md:py-3 rounded-xl text-sm font-bold transition ${activeTab === "offers" ? "bg-green-50 dark:bg-green-900/30 text-green-700 dark:text-green-400 border border-green-200 dark:border-green-800/50" : "text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-[#1a1a1a]"}`}><Zap size={18} /> Offers</button>
           <button onClick={() => setActiveTab("settings")} className={`shrink-0 flex items-center justify-center gap-2 px-4 py-2.5 md:py-3 rounded-xl text-sm font-bold transition ${activeTab === "settings" ? "bg-green-50 dark:bg-green-900/30 text-green-700 dark:text-green-400 border border-green-200 dark:border-green-800/50" : "text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-[#1a1a1a]"}`}><Settings size={18} /> Settings</button>
           <button onClick={() => setActiveTab("reviews")} className={`shrink-0 flex items-center justify-center gap-2 px-4 py-2.5 md:py-3 rounded-xl text-sm font-bold transition ${activeTab === "reviews" ? "bg-green-50 dark:bg-green-900/30 text-green-700 dark:text-green-400 border border-green-200 dark:border-green-800/50" : "text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-[#1a1a1a]"}`}><Star size={18} /> Reviews {unreadReviewsCount > 0 && <span className="bg-blue-500 text-white text-[10px] px-2 py-0.5 rounded-full">{unreadReviewsCount}</span>}</button>
+          {/* 🔴 NEW PARTNERS TAB 🔴 */}
+          <button onClick={() => setActiveTab("partners")} className={`shrink-0 flex items-center justify-center gap-2 px-4 py-2.5 md:py-3 rounded-xl text-sm font-bold transition ${activeTab === "partners" ? "bg-green-50 dark:bg-green-900/30 text-green-700 dark:text-green-400 border border-green-200 dark:border-green-800/50" : "text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-[#1a1a1a]"}`}><Bike size={18} /> Delivery Partners</button>
         </div>
 
         {/* ================= TAB CONTENTS ================= */}
@@ -1083,11 +1092,11 @@ export default function AdminDashboard() {
                 </div>
               )}
 
-              {/* 🔴 NEW OFFERS TAB 🔴 */}
+              {/* OFFERS TAB */}
               {activeTab === "offers" && (
                 <div className="bg-white dark:bg-[#121212] p-4 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-800">
                   <div className="mb-6 flex items-center justify-between border-b border-gray-200 dark:border-gray-800 pb-4">
-                    <h2 className="text-lg font-bold text-gray-900 dark:text-white flex items-center gap-2"><Zap className="text-yellow-500" size={20} /> Product Offers (BOGO)</h2>
+                    <h2 className="text-lg font-bold text-gray-900 dark:text-white flex items-center gap-2"><Zap size={20} className="text-yellow-500" /> Product Offers (BOGO)</h2>
                     <button onClick={() => setShowOfferModal(true)} className="flex items-center gap-1 bg-yellow-500 hover:bg-yellow-600 text-white px-4 py-2 rounded-lg font-bold transition"><Plus size={16} /> Create Offer</button>
                   </div>
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -1112,6 +1121,50 @@ export default function AdminDashboard() {
                   </div>
                 </div>
               )}
+
+              {/* 🔴 NEW PARTNERS TAB 🔴 */}
+              {activeTab === "partners" && (
+                <div className="bg-white dark:bg-[#121212] p-4 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-800">
+                  <div className="mb-6 flex items-center justify-between border-b border-gray-200 dark:border-gray-800 pb-4">
+                    <h2 className="text-lg font-bold text-gray-900 dark:text-white flex items-center gap-2">
+                      <Bike className="text-blue-500" size={20} /> Delivery Partners ({partners.length})
+                    </h2>
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    {partners.map((partner) => {
+                      const deliveredCount = orders.filter(o => o.driverId === partner.id && o.status === "Delivered").length;
+                      return (
+                        <div key={partner.id} className="bg-gray-50 dark:bg-[#1a1a1a] p-4 md:p-5 rounded-xl border border-gray-200 dark:border-gray-800 shadow-sm flex flex-col transition hover:shadow-md">
+                          <div className="flex justify-between items-start mb-4">
+                            <div className="flex items-center gap-3">
+                              <div className="w-10 h-10 bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400 rounded-full flex items-center justify-center font-bold text-lg shrink-0">
+                                {partner.name?.charAt(0) || "D"}
+                              </div>
+                              <div>
+                                <p className="font-bold text-gray-900 dark:text-white leading-tight">{partner.name || "Delivery Partner"}</p>
+                                <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5 flex items-center gap-1"><Phone size={10} /> {partner.phone || "N/A"}</p>
+                              </div>
+                            </div>
+                            {partner.isOnline ? (
+                              <span className="bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400 px-2 py-1 rounded text-[10px] font-bold flex items-center gap-1"><div className="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse"></div> Online</span>
+                            ) : (
+                              <span className="bg-gray-200 text-gray-700 dark:bg-gray-800 dark:text-gray-400 px-2 py-1 rounded text-[10px] font-bold">Offline</span>
+                            )}
+                          </div>
+                          <div className="mt-auto grid grid-cols-1 gap-2 bg-white dark:bg-[#121212] p-3 rounded-lg border border-gray-200 dark:border-gray-800">
+                            <div className="flex justify-between items-center">
+                              <p className="text-[10px] md:text-[11px] text-gray-500 dark:text-gray-400 font-bold uppercase">Total Delivered</p>
+                              <p className="text-base md:text-lg font-extrabold text-blue-600 dark:text-blue-500">{deliveredCount} <span className="text-[10px] text-gray-400">parcels</span></p>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                    {partners.length === 0 && <p className="text-gray-500 dark:text-gray-400 col-span-3 text-center p-8">No delivery partners found.</p>}
+                  </div>
+                </div>
+              )}
+
             </>
           )}
         </div>
@@ -1216,7 +1269,6 @@ export default function AdminDashboard() {
                     </select>
                   )}
                 </div>
-                {/* 🔴 NEW: SELECT OFFER DROPDOWN 🔴 */}
                 <div>
                   <label className="block text-sm font-semibold mb-1 text-gray-700 dark:text-gray-300">Apply BOGO Offer</label>
                   <select className="w-full border border-gray-300 dark:border-gray-700 rounded-lg p-2.5 bg-blue-50 dark:bg-blue-900/20 text-blue-800 dark:text-blue-400 font-bold focus:ring-2 focus:ring-blue-500 outline-none transition" value={newItem.offerId} onChange={(e) => setNewItem({...newItem, offerId: e.target.value})}>
@@ -1276,7 +1328,6 @@ export default function AdminDashboard() {
                   <label className="block text-sm font-semibold mb-1 text-gray-700 dark:text-gray-300">Category</label>
                   <input required type="text" className="w-full border border-gray-300 dark:border-gray-700 rounded-lg p-2.5 bg-gray-50 dark:bg-[#1a1a1a] text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 outline-none transition" value={editingProduct.category} onChange={(e) => setEditingProduct({...editingProduct, category: e.target.value})} />
                 </div>
-                {/* 🔴 NEW: EDIT OFFER DROPDOWN 🔴 */}
                 <div>
                   <label className="block text-sm font-semibold mb-1 text-gray-700 dark:text-gray-300">Apply BOGO Offer</label>
                   <select className="w-full border border-gray-300 dark:border-gray-700 rounded-lg p-2.5 bg-blue-50 dark:bg-blue-900/20 text-blue-800 dark:text-blue-400 font-bold focus:ring-2 focus:ring-blue-500 outline-none transition" value={editingProduct.offerId || ""} onChange={(e) => setEditingProduct({...editingProduct, offerId: e.target.value})}>
@@ -1318,7 +1369,7 @@ export default function AdminDashboard() {
         </div>
       )}
 
-      {/* ================= ADD OFFER MODAL (NEW) ================= */}
+      {/* ================= ADD OFFER MODAL ================= */}
       {showOfferModal && (
         <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
           <div className="bg-white dark:bg-[#121212] w-full max-w-md rounded-2xl shadow-2xl overflow-hidden border border-gray-200 dark:border-gray-800 animate-in fade-in zoom-in duration-300">

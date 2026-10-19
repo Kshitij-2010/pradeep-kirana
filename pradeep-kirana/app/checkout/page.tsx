@@ -275,52 +275,73 @@ export default function CheckoutPage() {
   }, [router]);
 
   // ============================================================
-  // LOCATION
+  // 🔥 ADVANCED LOCATION SAMPLING (10-15 SAMPLES AVERAGE) 🔥
   // ============================================================
 
-  const handleGetLocation = () => {
+  const handleGetLocation = async () => {
     if (!navigator.geolocation) {
       showToast(
         "Your browser does not support location features.",
         "error"
       );
-
       return;
     }
 
     setFetchingLocation(true);
+    showToast("Analyzing precise GPS coordinates...", "info");
 
-    navigator.geolocation.getCurrentPosition(
-      (position) => {
-        const lat = position.coords.latitude;
-        const lng = position.coords.longitude;
-
-        setLocationCoords({
-          lat,
-          lng,
+    const getPosition = (): Promise<GeolocationPosition> => {
+      return new Promise((resolve, reject) => {
+        navigator.geolocation.getCurrentPosition(resolve, reject, {
+          enableHighAccuracy: true,
+          maximumAge: 0,
+          timeout: 5000,
         });
+      });
+    };
 
-        setFormData((prev) => ({
-          ...prev,
-          mapLink: `https://www.google.com/maps?q=${lat},${lng}`,
-        }));
+    try {
+      const samples: { lat: number; lng: number }[] = [];
+      const MAX_SAMPLES = 10;
+      let attempts = 0;
 
-        setFetchingLocation(false);
-
-        showToast(
-          "Live location attached successfully.",
-          "success"
-        );
-      },
-      () => {
-        showToast(
-          "Please allow location permissions in your browser.",
-          "error"
-        );
-
-        setFetchingLocation(false);
+      // Loop to capture exactly 10 samples (max 15 attempts in case of timeout/skip)
+      while (samples.length < MAX_SAMPLES && attempts < 15) {
+        attempts++;
+        try {
+          const pos = await getPosition();
+          samples.push({
+            lat: pos.coords.latitude,
+            lng: pos.coords.longitude,
+          });
+          // 400ms delay allow GPS hardware to refine signal
+          await new Promise((resolve) => setTimeout(resolve, 400));
+        } catch (err) {
+          console.warn("Location sample skipped", err);
+        }
       }
-    );
+
+      if (samples.length === 0) {
+        throw new Error("Could not fetch location.");
+      }
+
+      // Calculate the average of all captured samples for pin-point accuracy
+      const avgLat = samples.reduce((sum, val) => sum + val.lat, 0) / samples.length;
+      const avgLng = samples.reduce((sum, val) => sum + val.lng, 0) / samples.length;
+
+      setLocationCoords({ lat: avgLat, lng: avgLng });
+
+      setFormData((prev) => ({
+        ...prev,
+        mapLink: `https://www.google.com/maps?q=${avgLat},${avgLng}`,
+      }));
+
+      showToast(`Precise location attached! (Averaged ${samples.length} samples)`, "success");
+    } catch (error) {
+      showToast("Please allow location permissions in your browser.", "error");
+    } finally {
+      setFetchingLocation(false);
+    }
   };
 
   // ============================================================
@@ -1333,7 +1354,7 @@ export default function CheckoutPage() {
                   />
 
                   {fetchingLocation
-                    ? "Locating..."
+                    ? "Locating precisely..."
                     : "Use Live Location"}
                 </button>
               </div>
@@ -1368,7 +1389,7 @@ export default function CheckoutPage() {
 
                   <div className="absolute bottom-2 right-2 bg-green-600 text-white text-[10px] px-2 py-1 rounded shadow-md flex items-center gap-1 font-bold">
                     <CheckCircle2 size={12} />
-                    Attached
+                    GPS Locked
                   </div>
                 </div>
               )}
